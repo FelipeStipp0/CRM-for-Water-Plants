@@ -1,0 +1,80 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Pytest
+.pytest_cache/
+htmlcov/
+.coverage
+
+# MongoDB
+*.bson
+dump/
+
+# Logs
+*.log
+
+# Temp
+*.tmp
+nul
+
+# Frontend build / artefatos locais
+frontend/build/
+frontend/dist/
+frontend/installer_output/
+frontend/.pycache_tmp/
+frontend/.pycache_tmp_verify/
+
+# Next.js
+admin-panel/.next/
+admin-panel/node_modules/
+
+# Node
+admin-api/node_modules/
+admin-api/dist/
+
+# Env locals
+admin-panel/.env.local
+admin-api/.env
+
+# Claude/AI artifacts
+.claude/
+
+# Dev utility scripts
+ast_scan*.py
+universal_validator.py
+validator_output.json
+verify_*.py
+flet_signatures.txt
+flet_usage.json
+
+# Documentação interna (mantida local, não versionada)
+docs/

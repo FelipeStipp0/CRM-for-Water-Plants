@@ -1,0 +1,10 @@
+{
+    "api_base_url": "http://localhost:8000",
+    "printer_thermal": "Microsoft Print to PDF",
+    "printer_a4": "Microsoft Print to PDF",
+    "theme": "dark",
+    "language": "es",
+    "org_slug": "juntacrm",
+    "invoice_print_format": "p80",
+    "auth_token": null
+}

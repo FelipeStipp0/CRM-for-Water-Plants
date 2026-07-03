@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "packages": {
+    "python": "3.14"
+  },
+  "steps": {
+    "install": {
+      "commands": [
+        "...",
+        "/app/.venv/bin/pip install -r requirements.txt --ignore-requires-python"
+      ]
+    }
+  }
+}

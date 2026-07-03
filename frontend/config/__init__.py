@@ -1,0 +1,1 @@
+# WMApp Frontend - Config Package
