@@ -472,6 +472,7 @@ from views.readings_view import ReadingsView
 from views.profile_view import ProfileView
 from views.about_view import AboutView
 from views.settings_view import SettingsView
+from views.sifen_view import SifenView
 from views.sponsors_view import SponsorsView
 
 
@@ -672,6 +673,15 @@ class WMApp:
             pass
         self.splash.show_check(t("splash.welcome"), hold_ms=550)
         self._enter_main_layout()
+        self._start_sifen_coordinator()
+
+    def _start_sifen_coordinator(self):
+        """Liga o coordenador de emissão em background (só emite se este PC for permitido)."""
+        try:
+            from services.sifen_coordinator import get_coordinator
+            get_coordinator().start()
+        except Exception as err:  # noqa: BLE001
+            print(f"[WMApp] sifen_coordinator_start_error err={err}")
 
     def _enter_main_layout(self):
         """Redimensiona pro tamanho do app principal e troca pro layout."""
@@ -896,6 +906,10 @@ class WMApp:
             "/finance": lambda: FinanceView(show_snackbar=self.show_snackbar),
             "/sponsors": lambda: SponsorsView(show_snackbar=self.show_snackbar),
             "/map": lambda: MapView(),
+            "/sifen": lambda: SifenView(
+                show_snackbar=self.show_snackbar,
+                current_user=self.current_user,
+            ),
             "/settings": lambda: self._settings_view or SettingsView(
                 show_snackbar=self.show_snackbar,
                 on_printer_change=self._on_printer_change,

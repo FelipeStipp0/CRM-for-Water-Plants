@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     whatsapp_phone_number_id: str = ""
     whatsapp_verify_token: str = ""
 
+    # Facturación electrónica (SIFEN) — o adapter concreto e a base do endpoint
+    # ficam FORA do repo público; vêm por env (.env). Se vazios, emissão desabilitada.
+    sifen_provider: str = ""   # ex.: "app.services.sifen._adapter" (módulo externo via junction)
+    sifen_base: str = ""       # base URL do portal (usada só pelo adapter externo)
+
     # App
     debug: bool = True
     app_name: str = "Saneo API"

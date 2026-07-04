@@ -35,6 +35,7 @@ class Sidebar(ft.Container):
             {"icon": ft.Icons.ACCOUNT_BALANCE, "label_key": "nav.finance", "route": "/finance", "scope": "finance"},
             {"icon": ft.Icons.VOLUNTEER_ACTIVISM, "label_key": "nav.sponsors", "route": "/sponsors", "scope": ("sponsors", "finance")},
             {"icon": ft.Icons.MAP, "label_key": "nav.map", "route": "/map", "scope": "clients"},
+            {"icon": ft.Icons.REQUEST_QUOTE, "label_key": "nav.sifen", "route": "/sifen", "scope": "settings"},
             {"icon": ft.Icons.SETTINGS, "label_key": "nav.settings", "route": "/settings", "scope": "settings"},
         ]
 

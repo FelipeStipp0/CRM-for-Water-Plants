@@ -79,7 +79,7 @@ def create_app() -> FastAPI:
     app.add_middleware(GZipMiddleware, minimum_size=1024)
 
     # Registrar routers
-    from app.routers import auth, clients, readings, invoices, payments, settings as settings_router, finance, sponsors, cutoff, upload, map_tiles
+    from app.routers import auth, clients, readings, invoices, payments, settings as settings_router, finance, sponsors, cutoff, upload, map_tiles, sifen
     from app.whatsapp.router import router as whatsapp_router
 
     app.include_router(auth.router, prefix="/auth", tags=["Autenticacao"])
@@ -94,6 +94,7 @@ def create_app() -> FastAPI:
     app.include_router(cutoff.qr_router, prefix="/cutoff", tags=["Corte QR"])
     app.include_router(upload.router, prefix="/upload", tags=["Upload"])
     app.include_router(map_tiles.router, prefix="/map", tags=["Mapa"])
+    app.include_router(sifen.router, prefix="/sifen", tags=["Facturación electrónica"])
     app.include_router(whatsapp_router, prefix="/whatsapp", tags=["WhatsApp"])
 
     @app.get("/", tags=["Health"])

@@ -78,3 +78,11 @@ flet_usage.json
 
 # Documentação interna (mantida local, não versionada)
 docs/
+
+# Adapter de facturación electrónica (módulo fechado, plugado via junction do Windows)
+backend/app/services/sifen/_adapter
+backend/app/services/sifen/_adapter/
+
+# Adapter SIFEN bundlado no frontend (junction, repo fechado)
+frontend/services/sifen_adapter
+frontend/services/sifen_adapter/

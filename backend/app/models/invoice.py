@@ -59,6 +59,11 @@ class InvoiceItem(BaseModel):
     cantidad: int = 1
     precio_unitario: MongoDecimal
 
+    # Facturación electrónica: IVA por item (AVULSA).
+    # afectacion: 1=Gravado, 2=Parcial, 3=Exento ; tasa: 0/5/10
+    iva_afectacion: int = 1
+    iva_tasa: int = 10
+
     @property
     def subtotal(self) -> Decimal:
         return Decimal(self.cantidad) * self.precio_unitario

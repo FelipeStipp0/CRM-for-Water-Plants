@@ -123,6 +123,27 @@ def set_org_slug(slug: str) -> None:
     save_preferences({"org_slug": slug})
 
 
+def get_machine_id() -> str:
+    """ID estável deste dispositivo (gerado uma vez, persistido). Usado no coordenador."""
+    import uuid
+    prefs = load_preferences()
+    mid = prefs.get("machine_id")
+    if not mid:
+        mid = uuid.uuid4().hex
+        save_preferences({"machine_id": mid})
+    return mid
+
+
+def get_device_label() -> str:
+    """Rótulo amigável do PC (nome da máquina por padrão)."""
+    import socket
+    return load_preferences().get("device_label") or socket.gethostname()
+
+
+def set_device_label(label: str) -> None:
+    save_preferences({"device_label": label})
+
+
 def get_mapbox_tile_url() -> str:
     """Retorna URL template de tiles via proxy backend (controla concorrência e faz cache)."""
     base = get_api_url().rstrip("/")

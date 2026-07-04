@@ -41,6 +41,11 @@ class Client(Document):
     ci_ruc: Indexed(str, unique=True)
     telefono: Optional[str] = None
     celular: Optional[str] = None
+    email: Optional[str] = None  # p/ dEmailRec na fatura eletrônica (nem todo cliente tem)
+
+    # Facturación electrónica: True = tem RUC (contribuinte). None = derivar via
+    # dataset DNIT no 1º uso e cachear aqui; operador pode corrigir manualmente.
+    es_contribuyente: Optional[bool] = None
 
     # Localizacao (usado para rotas de leitura)
     direccion: str

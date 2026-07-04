@@ -56,6 +56,13 @@ class SystemSettings(Document):
     taxa_reativacao: MongoDecimal = Decimal("50000")
     multa: MongoDecimal = Decimal("0")  # Multa/recargo aplicado na Orden de Corte
 
+    # ========== FACTURACIÓN ELECTRÓNICA (SIFEN) ==========
+    # Afetação de IVA da ÁGUA (default global da junta; ajustável).
+    # afectacion: 1=Gravado, 3=Exento ; tasa: 0/5/10
+    # Fatura CONSUMO usa estes valores; fatura AVULSA usa o IVA por item.
+    iva_afectacion_agua: int = 1
+    iva_tasa_agua: int = 10
+
     # WhatsApp
     whatsapp_alias: Optional[str] = None
 

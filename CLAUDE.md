@@ -141,6 +141,10 @@ backend/app/
 - [FRONTEND_INTEGRATION.md](docs/FRONTEND_INTEGRATION.md) — endpoints e integração do frontend.
 - [implementation_plan.md](docs/implementation_plan.md) — arquitetura (API remota + cliente local).
 - [architecture/PLANO_WHATSAPP_MULTIORG.md](docs/architecture/PLANO_WHATSAPP_MULTIORG.md) — multi-org + WhatsApp.
+- **Facturación electrónica (SIFEN/DNIT)**: docs locais (gitignored) em `docs/SIFEN_*.md` — referência
+  da API, arquitetura de integração (sessão única, lock, coordenador, subsídio, KuDE) e plano por fases.
+  A implementação sensível mora num módulo/repo **fechado** à parte; no repo público a integração é
+  genérica e o endpoint vem de env var (`SIFEN_BASE`).
 - PDFs/impressão: [PDF_IMPLEMENTATION_VALIDATION.md](docs/PDF_IMPLEMENTATION_VALIDATION.md),
   [PDF_TEMPLATE_MIGRATION_PLAN.md](docs/PDF_TEMPLATE_MIGRATION_PLAN.md),
   [PRINTING_TROUBLESHOOTING.md](docs/PRINTING_TROUBLESHOOTING.md).

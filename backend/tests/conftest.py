@@ -21,6 +21,7 @@ from app.models.settings import SystemSettings
 from app.models.finance import CashTransaction, Expense, Employee, Payroll
 from app.models.sponsor import SponsorDebt, SponsorInvoice
 from app.models.cutoff import CutoffNotice
+from app.models.sifen import SifenEmission, SifenSessionLock, SifenCredential, SifenCoordinator
 from app.utils.security import get_password_hash, create_access_token
 
 
@@ -50,6 +51,10 @@ async def test_db():
             SponsorDebt,
             SponsorInvoice,
             CutoffNotice,
+            SifenEmission,
+            SifenSessionLock,
+            SifenCredential,
+            SifenCoordinator,
         ]
     )
 

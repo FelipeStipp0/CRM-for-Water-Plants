@@ -37,10 +37,14 @@ def _get_org_document_models() -> list:
     from app.models.finance import CashTransaction, Expense, Employee, Payroll
     from app.models.sponsor import SponsorDebt, SponsorInvoice
     from app.models.cutoff import CutoffNotice
+    from app.models.sifen import (
+        SifenEmission, SifenSessionLock, SifenCredential, SifenCoordinator,
+    )
     return [
         User, Client, Reading, Invoice, Counter, Payment,
         SystemSettings, CashTransaction, Expense, Employee,
         Payroll, SponsorDebt, SponsorInvoice, CutoffNotice,
+        SifenEmission, SifenSessionLock, SifenCredential, SifenCoordinator,
     ]
 
 
