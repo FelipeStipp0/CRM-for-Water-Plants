@@ -16,7 +16,6 @@ from datetime import datetime
 from typing import Callable, Optional
 
 from pymongo import ReturnDocument
-from requests.exceptions import ConnectionError as ReqConnError, Timeout
 
 from app.models.sifen import SifenEmission, EmissionStatus
 from app.services.sifen import lock
@@ -31,8 +30,16 @@ class EmissionError(RuntimeError):
     """Erro de negócio/firma que interrompe a emissão (não é rede)."""
 
 
+# erros de rede detectados por nome (o backend na nuvem não tem 'requests';
+# ele é dep só do adapter, que roda no coordenador local)
+_NET_ERR_NAMES = {
+    "ConnectionError", "Timeout", "ConnectTimeout", "ReadTimeout",
+    "ConnectionResetError", "TimeoutError", "RequestException",
+}
+
+
 def _erro_de_rede(e: Exception) -> bool:
-    return isinstance(e, (ReqConnError, Timeout))
+    return any(base.__name__ in _NET_ERR_NAMES for base in type(e).__mro__)
 
 
 def _extrai(xml: bytes, tag: str) -> Optional[str]:
