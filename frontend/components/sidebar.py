@@ -4,7 +4,7 @@ Menu lateral com navegacao por modulos e controle por escopo.
 """
 import flet as ft
 
-from components.theme import COLORS, FONTS, SPACING
+from components.theme import COLORS, FONTS, RADIUS, SPACING
 from i18n import t
 
 
@@ -27,16 +27,16 @@ class Sidebar(ft.Container):
         self.on_logout = on_logout
 
         self.menu_items = [
-            {"icon": ft.Icons.PEOPLE, "label_key": "nav.clients", "route": "/clients", "scope": "clients"},
-            {"icon": ft.Icons.WATER_DROP, "label_key": "nav.readings", "route": "/readings", "scope": "readings"},
-            {"icon": ft.Icons.RECEIPT_LONG, "label_key": "nav.invoices", "route": "/invoices", "scope": "invoices"},
-            {"icon": ft.Icons.POINT_OF_SALE, "label_key": "nav.payments", "route": "/payments", "scope": "payments"},
-            {"icon": ft.Icons.POWER_OFF, "label_key": "nav.cutoff", "route": "/cutoff", "scope": "cutoff"},
-            {"icon": ft.Icons.ACCOUNT_BALANCE, "label_key": "nav.finance", "route": "/finance", "scope": "finance"},
-            {"icon": ft.Icons.VOLUNTEER_ACTIVISM, "label_key": "nav.sponsors", "route": "/sponsors", "scope": ("sponsors", "finance")},
-            {"icon": ft.Icons.MAP, "label_key": "nav.map", "route": "/map", "scope": "clients"},
-            {"icon": ft.Icons.REQUEST_QUOTE, "label_key": "nav.sifen", "route": "/sifen", "scope": "settings"},
-            {"icon": ft.Icons.SETTINGS, "label_key": "nav.settings", "route": "/settings", "scope": "settings"},
+            {"icon": ft.Icons.GROUP_OUTLINED, "label_key": "nav.clients", "route": "/clients", "scope": "clients"},
+            {"icon": ft.Icons.WATER_DROP_OUTLINED, "label_key": "nav.readings", "route": "/readings", "scope": "readings"},
+            {"icon": ft.Icons.RECEIPT_LONG_OUTLINED, "label_key": "nav.invoices", "route": "/invoices", "scope": "invoices"},
+            {"icon": ft.Icons.INVENTORY_2_OUTLINED, "label_key": "nav.products", "route": "/products", "scope": "invoices"},
+            {"icon": ft.Icons.POINT_OF_SALE_OUTLINED, "label_key": "nav.payments", "route": "/payments", "scope": "payments"},
+            {"icon": ft.Icons.CONTENT_CUT, "label_key": "nav.cutoff", "route": "/cutoff", "scope": "cutoff"},
+            {"icon": ft.Icons.ACCOUNT_BALANCE_OUTLINED, "label_key": "nav.finance", "route": "/finance", "scope": "finance"},
+            {"icon": ft.Icons.VOLUNTEER_ACTIVISM_OUTLINED, "label_key": "nav.sponsors", "route": "/sponsors", "scope": ("sponsors", "finance")},
+            {"icon": ft.Icons.MAP_OUTLINED, "label_key": "nav.map", "route": "/map", "scope": "clients"},
+            {"icon": ft.Icons.SETTINGS_OUTLINED, "label_key": "nav.settings", "route": "/settings", "scope": "settings"},
         ]
 
         self._build()
@@ -65,17 +65,17 @@ class Sidebar(ft.Container):
                 data={"route": "/profile", "is_active": self.current_route == "/profile"},
                 content=ft.Row(
                     [
-                        ft.Icon(ft.Icons.MANAGE_ACCOUNTS, size=18,
-                                color=COLORS["accent_primary"] if self.current_route == "/profile" else COLORS["text_secondary"]),
+                        ft.Icon(ft.Icons.MANAGE_ACCOUNTS_OUTLINED, size=19,
+                                color=COLORS["accent_secondary"] if self.current_route == "/profile" else COLORS["text_muted"]),
                         ft.Text(t("nav.profile"),
                                 color=COLORS["text_primary"] if self.current_route == "/profile" else COLORS["text_secondary"],
-                                weight=ft.FontWeight.W_500 if self.current_route == "/profile" else ft.FontWeight.NORMAL),
+                                weight=ft.FontWeight.W_600 if self.current_route == "/profile" else ft.FontWeight.NORMAL),
                     ],
                     spacing=8,
                 ),
-                padding=ft.padding.symmetric(horizontal=SPACING["md"], vertical=SPACING["sm"]),
-                border_radius=8,
-                bgcolor=COLORS["bg_surface"] if self.current_route == "/profile" else None,
+                padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                border_radius=RADIUS["md"],
+                bgcolor=COLORS["nav_active"] if self.current_route == "/profile" else None,
                 on_click=lambda e: self._handle_click("/profile"),
                 on_hover=self._hover,
             )
@@ -86,16 +86,16 @@ class Sidebar(ft.Container):
                 content=ft.Row(
                     [
                         ft.Icon(ft.Icons.INFO_OUTLINE, size=18,
-                                color=COLORS["accent_primary"] if self.current_route == "/about" else COLORS["text_secondary"]),
+                                color=COLORS["accent_secondary"] if self.current_route == "/about" else COLORS["text_muted"]),
                         ft.Text(t("nav.about"),
                                 color=COLORS["text_primary"] if self.current_route == "/about" else COLORS["text_secondary"],
-                                weight=ft.FontWeight.W_500 if self.current_route == "/about" else ft.FontWeight.NORMAL),
+                                weight=ft.FontWeight.W_600 if self.current_route == "/about" else ft.FontWeight.NORMAL),
                     ],
                     spacing=8,
                 ),
-                padding=ft.padding.symmetric(horizontal=SPACING["md"], vertical=SPACING["sm"]),
-                border_radius=8,
-                bgcolor=COLORS["bg_surface"] if self.current_route == "/about" else None,
+                padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                border_radius=RADIUS["md"],
+                bgcolor=COLORS["nav_active"] if self.current_route == "/about" else None,
                 on_click=lambda e: self._handle_click("/about"),
                 on_hover=self._hover,
             )
@@ -111,8 +111,8 @@ class Sidebar(ft.Container):
                         ],
                         spacing=8,
                     ),
-                    padding=ft.padding.symmetric(horizontal=SPACING["md"], vertical=SPACING["sm"]),
-                    border_radius=8,
+                    padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+                    border_radius=RADIUS["md"],
                     on_click=lambda e: self.on_logout(),
                     on_hover=self._hover,
                 )
@@ -126,28 +126,29 @@ class Sidebar(ft.Container):
             spacing=0,
         )
 
-        self.width = 240
+        self.width = 232
         self.bgcolor = COLORS["bg_secondary"]
-        self.padding = ft.padding.symmetric(horizontal=SPACING["sm"], vertical=SPACING["md"])
+        self.padding = ft.Padding.symmetric(horizontal=10, vertical=SPACING["md"])
+        self.border = ft.Border.only(right=ft.BorderSide(1, COLORS["border_subtle"]))
 
     def _create_menu_item(self, item: dict, is_active: bool) -> ft.Container:
         return ft.Container(
             data={"route": item["route"], "is_active": is_active},
             content=ft.Row(
                 [
-                    ft.Icon(item["icon"], color=COLORS["accent_primary"] if is_active else COLORS["text_secondary"], size=20),
+                    ft.Icon(item["icon"], color=COLORS["accent_secondary"] if is_active else COLORS["text_muted"], size=20),
                     ft.Text(
                         t(item["label_key"]),
                         size=FONTS["size_base"],
                         color=COLORS["text_primary"] if is_active else COLORS["text_secondary"],
-                        weight=ft.FontWeight.W_500 if is_active else ft.FontWeight.NORMAL,
+                        weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.NORMAL,
                     ),
                 ],
-                spacing=SPACING["md"],
+                spacing=12,
             ),
-            padding=ft.padding.symmetric(horizontal=SPACING["md"], vertical=SPACING["sm"]),
-            border_radius=8,
-            bgcolor=COLORS["bg_surface"] if is_active else None,
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+            border_radius=RADIUS["md"],
+            bgcolor=COLORS["nav_active"] if is_active else None,
             on_click=lambda e, route=item["route"]: self._handle_click(route),
             on_hover=self._hover,
         )
@@ -155,9 +156,9 @@ class Sidebar(ft.Container):
     def _hover(self, e):
         is_active = bool((e.control.data or {}).get("is_active"))
         if e.data == "true":
-            e.control.bgcolor = COLORS["bg_elevated"]
+            e.control.bgcolor = COLORS["bg_hover"]
         else:
-            e.control.bgcolor = COLORS["bg_surface"] if is_active else None
+            e.control.bgcolor = COLORS["nav_active"] if is_active else None
         e.control.update()
 
     def _handle_click(self, route: str):

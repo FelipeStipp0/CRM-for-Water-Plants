@@ -6,7 +6,7 @@ import re
 import flet as ft
 from datetime import datetime
 from components.theme import (
-    COLORS, FONTS, SPACING,
+    COLORS, FONTS, RADIUS, SPACING,
     create_text_field, create_button
 )
 from services.auth_service import auth_service
@@ -33,52 +33,39 @@ class LoginView(ft.Container):
         super().__init__()
         self.on_login_success_callback = on_login_success
         self._pending_result = None  # Guarda resultado do login para uso após troca de senha
+
+        async def focus_username(_):
+            await self.username_field.focus()
+
+        async def focus_password(_):
+            await self.password_field.focus()
         
-        self.org_slug_field = ft.TextField(
+        self.org_slug_field = create_text_field(
             label="Organización (RUC)",
             value=get_org_slug(),
-            on_submit=lambda e: self.username_field.focus(),
+            on_submit=focus_username,
             hint_text="ej: 80012345-6",
             width=400,
-            height=56,
             text_size=16,
-            border_color=COLORS["border"],
-            focused_border_color=COLORS["border_focus"],
-            label_style=ft.TextStyle(color=COLORS["text_secondary"], size=14),
-            text_style=ft.TextStyle(color=COLORS["text_primary"], size=16),
-            cursor_color=COLORS["accent_primary"],
-            border_radius=8,
+            prefix_icon=ft.Icons.BUSINESS_OUTLINED,
         )
 
-        self.username_field = ft.TextField(
+        self.username_field = create_text_field(
             label=t("login.field.user"),
-            on_submit=lambda e: self.password_field.focus(),
+            on_submit=focus_password,
             autofocus=not bool(get_org_slug()),
             width=400,
-            height=56,
             text_size=16,
-            border_color=COLORS["border"],
-            focused_border_color=COLORS["border_focus"],
-            label_style=ft.TextStyle(color=COLORS["text_secondary"], size=14),
-            text_style=ft.TextStyle(color=COLORS["text_primary"], size=16),
-            cursor_color=COLORS["accent_primary"],
-            border_radius=8,
+            prefix_icon=ft.Icons.PERSON_OUTLINE,
         )
 
-        self.password_field = ft.TextField(
+        self.password_field = create_text_field(
             label=t("login.field.password"),
             password=True,
-            can_reveal_password=True,
             on_submit=lambda e: self._do_login(e),
             width=400,
-            height=56,
             text_size=16,
-            border_color=COLORS["border"],
-            focused_border_color=COLORS["border_focus"],
-            label_style=ft.TextStyle(color=COLORS["text_secondary"], size=14),
-            text_style=ft.TextStyle(color=COLORS["text_primary"], size=16),
-            cursor_color=COLORS["accent_primary"],
-            border_radius=8,
+            prefix_icon=ft.Icons.LOCK_OUTLINE,
         )
         
         self.error_text = ft.Text("", size=13, color=COLORS["accent_error"], visible=False)
@@ -93,15 +80,16 @@ class LoginView(ft.Container):
             visible=False,
         )
         
-        self.login_button = ft.Button(
-            content=ft.Text(t("login.btn.enter"), size=16, weight=ft.FontWeight.W_500),
+        self.login_button = ft.FilledButton(
+            content=ft.Text(t("login.btn.enter"), size=16, weight=ft.FontWeight.W_600),
             on_click=self._do_login,
             width=400,
             height=48,
             style=ft.ButtonStyle(
                 bgcolor=COLORS["accent_primary"],
                 color=COLORS["text_primary"],
-                shape=ft.RoundedRectangleBorder(radius=8),
+                shape=ft.RoundedRectangleBorder(radius=RADIUS["md"]),
+                elevation=0,
             ),
         )
         
@@ -143,7 +131,8 @@ class LoginView(ft.Container):
 
         if not org_slug:
             self._show_error(t("login.err.no_org"))
-            self.org_slug_field.focus()
+            if self.page:
+                self.page.run_task(self.org_slug_field.focus)
             return
 
         if not username or not password:
@@ -199,53 +188,46 @@ class LoginView(ft.Container):
     
     def _show_change_password_modal(self, username: str, current_password: str):
         """Mostra modal para trocar senha no primeiro acesso."""
-        new_pwd_field = ft.TextField(
+        new_pwd_field = create_text_field(
             label=t("login.cp.new"),
             password=True,
-            can_reveal_password=True,
             width=300,
-            border_color=COLORS["border"],
-            focused_border_color=COLORS["border_focus"],
             autofocus=True,
+            prefix_icon=ft.Icons.LOCK_OUTLINE,
         )
         
-        confirm_pwd_field = ft.TextField(
+        confirm_pwd_field = create_text_field(
             label=t("login.cp.confirm"),
             password=True,
-            can_reveal_password=True,
             width=300,
-            border_color=COLORS["border"],
-            focused_border_color=COLORS["border_focus"],
+            prefix_icon=ft.Icons.LOCK_RESET,
         )
-        
-        modal_error = ft.Text("", size=12, color=COLORS["accent_error"], visible=False)
+
+        def set_error(field: ft.TextField, message: str):
+            field.error = message
+            field.update()
         
         def do_change(e):
             new_pwd = new_pwd_field.value or ""
             confirm_pwd = confirm_pwd_field.value or ""
+            new_pwd_field.error = None
+            confirm_pwd_field.error = None
             
             if len(new_pwd) < 6:
-                modal_error.value = t("login.cp.err_min")
-                modal_error.visible = True
-                modal_error.update()
+                set_error(new_pwd_field, t("login.cp.err_min"))
                 return
             
             if new_pwd != confirm_pwd:
-                modal_error.value = t("login.cp.err_mismatch")
-                modal_error.visible = True
-                modal_error.update()
+                set_error(confirm_pwd_field, t("login.cp.err_mismatch"))
                 return
             
             if new_pwd == current_password:
-                modal_error.value = t("login.cp.err_same")
-                modal_error.visible = True
-                modal_error.update()
+                set_error(new_pwd_field, t("login.cp.err_same"))
                 return
             
             try:
                 auth_service.change_password(current_password, new_pwd)
-                dialog.open = False
-                self.page.update()
+                self.page.pop_dialog()
                 
                 # Faz novo login com nova senha
                 org_slug = self.org_slug_field.value.strip() if self.org_slug_field.value else ""
@@ -254,11 +236,10 @@ class LoginView(ft.Container):
                 self.on_login_success_callback(user)
                 
             except APIError as err:
-                modal_error.value = str(err.detail)
-                modal_error.visible = True
-                modal_error.update()
+                set_error(confirm_pwd_field, str(err.detail))
         
         dialog = ft.AlertDialog(
+            modal=True,
             title=ft.Text(t("login.cp.title")),
             content=ft.Container(
                 content=ft.Column([
@@ -268,18 +249,24 @@ class LoginView(ft.Container):
                     new_pwd_field,
                     ft.Container(height=8),
                     confirm_pwd_field,
-                    modal_error,
                 ], spacing=0, tight=True),
                 width=320,
             ),
             actions=[
-                ft.Button(content=ft.Text(t("login.cp.submit")), on_click=do_change),
+                ft.FilledButton(
+                    content=ft.Text(t("login.cp.submit")),
+                    on_click=do_change,
+                    style=ft.ButtonStyle(
+                        bgcolor=COLORS["accent_secondary"],
+                        color=COLORS["text_primary"],
+                    ),
+                ),
             ],
+            actions_alignment=ft.MainAxisAlignment.END,
+            scrollable=True,
         )
         
-        self.page.overlay.append(dialog)
-        dialog.open = True
-        self.page.update()
+        self.page.show_dialog(dialog)
     
     def _show_error(self, message: str):
         self.error_text.value = message

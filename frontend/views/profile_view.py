@@ -125,13 +125,13 @@ class ProfileView(ft.Container):
             height=96,
             fit=ft.BoxFit.COVER,
             visible=False,
-            border_radius=ft.border_radius.all(48),
+            border_radius=ft.BorderRadius.all(48),
         )
         self._avatar_placeholder = ft.Container(
             width=96,
             height=96,
             bgcolor=COLORS["bg_elevated"],
-            border_radius=ft.border_radius.all(48),
+            border_radius=ft.BorderRadius.all(48),
             content=ft.Icon(ft.Icons.PERSON, size=48, color=COLORS["text_muted"]),
             alignment=ft.Alignment.CENTER,
             visible=True,
@@ -164,7 +164,7 @@ class ProfileView(ft.Container):
             content=self._role_text,
             bgcolor=COLORS["accent_primary"],
             border_radius=4,
-            padding=ft.padding.symmetric(horizontal=8, vertical=3),
+            padding=ft.Padding.symmetric(horizontal=8, vertical=3),
             visible=False,
         )
 

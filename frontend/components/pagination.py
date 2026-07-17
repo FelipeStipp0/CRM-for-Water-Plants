@@ -29,20 +29,20 @@ class Pagination(ft.Container):
         self._prev_btn = ft.IconButton(
             icon=ft.Icons.CHEVRON_LEFT,
             icon_color=COLORS["text_secondary"],
-            icon_size=16,
+            icon_size=18,
             tooltip=t("pagination.prev"),
             on_click=self._go_prev,
             disabled=True,
-            style=ft.ButtonStyle(padding=ft.padding.all(2)),
+            style=ft.ButtonStyle(padding=6),
         )
         self._next_btn = ft.IconButton(
             icon=ft.Icons.CHEVRON_RIGHT,
             icon_color=COLORS["text_secondary"],
-            icon_size=16,
+            icon_size=18,
             tooltip=t("pagination.next"),
             on_click=self._go_next,
             disabled=True,
-            style=ft.ButtonStyle(padding=ft.padding.all(2)),
+            style=ft.ButtonStyle(padding=6),
         )
         self._label = ft.Text(
             "",
@@ -57,7 +57,7 @@ class Pagination(ft.Container):
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
         self.content = self._row
-        self.padding = ft.padding.symmetric(vertical=4)
+        self.padding = ft.Padding.symmetric(vertical=6)
         self.visible = False
 
     @property

@@ -50,7 +50,7 @@ class ClientSearchField(ft.Column):
             text_style=ft.TextStyle(color=COLORS["text_primary"]),
             cursor_color=COLORS["accent_primary"],
             border_radius=8,
-            content_padding=ft.padding.symmetric(horizontal=16, vertical=12),
+            content_padding=ft.Padding.symmetric(horizontal=16, vertical=12),
             hint_text="Nome ou número do medidor...",
             hint_style=ft.TextStyle(color=COLORS["text_muted"]),
             on_change=self._on_change,
@@ -66,7 +66,7 @@ class ClientSearchField(ft.Column):
             text_style=ft.TextStyle(color=COLORS["text_primary"]),
             cursor_color=COLORS["accent_primary"],
             border_radius=8,
-            content_padding=ft.padding.symmetric(horizontal=12, vertical=12),
+            content_padding=ft.Padding.symmetric(horizontal=12, vertical=12),
             hint_text="—",
             hint_style=ft.TextStyle(color=COLORS["text_muted"]),
             on_change=self._on_change,
@@ -81,7 +81,7 @@ class ClientSearchField(ft.Column):
             text_style=ft.TextStyle(color=COLORS["text_primary"]),
             cursor_color=COLORS["accent_primary"],
             border_radius=8,
-            content_padding=ft.padding.symmetric(horizontal=12, vertical=12),
+            content_padding=ft.Padding.symmetric(horizontal=12, vertical=12),
             hint_text="—",
             hint_style=ft.TextStyle(color=COLORS["text_muted"]),
             on_change=self._on_change,
@@ -93,7 +93,7 @@ class ClientSearchField(ft.Column):
             width=width,
             bgcolor=COLORS["bg_elevated"],
             border=ft.Border.all(1, COLORS["border"]),
-            border_radius=ft.border_radius.only(bottom_left=8, bottom_right=8),
+            border_radius=ft.BorderRadius.only(bottom_left=8, bottom_right=8),
             visible=False,
             shadow=ft.BoxShadow(
                 spread_radius=0,
@@ -186,7 +186,7 @@ class ClientSearchField(ft.Column):
                         size=FONTS["size_sm"],
                         italic=True,
                     ),
-                    padding=ft.padding.symmetric(horizontal=16, vertical=10),
+                    padding=ft.Padding.symmetric(horizontal=16, vertical=10),
                 )
             )
         else:
@@ -206,7 +206,7 @@ class ClientSearchField(ft.Column):
                         overflow=ft.TextOverflow.ELLIPSIS,
                         max_lines=1,
                     ),
-                    padding=ft.padding.symmetric(horizontal=16, vertical=9),
+                    padding=ft.Padding.symmetric(horizontal=16, vertical=9),
                     on_click=make_click(c),
                     on_hover=self._on_item_hover,
                     border_radius=4,
@@ -223,7 +223,7 @@ class ClientSearchField(ft.Column):
                             size=11,
                             italic=True,
                         ),
-                        padding=ft.padding.symmetric(horizontal=16, vertical=6),
+                        padding=ft.Padding.symmetric(horizontal=16, vertical=6),
                     )
                 )
 

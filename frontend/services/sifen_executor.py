@@ -56,7 +56,9 @@ def emitir_job(job: dict) -> dict:
     timed("login", prov.login)
     try:
         rec = timed("resolver", lambda: _receptor.resolver_receptor(
-            prov, job["doc"], tipo_id=job.get("tipo_id") or 1))
+            prov, job["doc"], tipo_id=job.get("tipo_id") or 1,
+            nombre=job.get("nombre"),
+            ruc_lookup=lambda d: sifen_service.ruc_lookup(d)))
         dte = _dte_builder.build_dte(
             rec, job["items"],
             job.get("condicion") or {"tipo": "contado",

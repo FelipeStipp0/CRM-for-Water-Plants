@@ -13,15 +13,23 @@ class SifenService:
     """Fala com /sifen no backend."""
 
     # ---------- operador ----------
-    def emitir(self, client_request_id: str, receptor: dict, items: list[dict],
+    def emitir(self, client_request_id: str, doc: str, items: list[dict],
+               nombre: Optional[str] = None, tipo_id: int = 1,
                condicion: Optional[dict] = None, client_id: Optional[str] = None,
                payment_id: Optional[str] = None) -> dict:
-        """Enfileira uma emissão (idempotente por client_request_id)."""
+        """Enfileira uma emissão (idempotente por client_request_id).
+
+        O coordenador resolve o receptor a partir de `doc` (RUC/CI/OEE) na sessão
+        do portal — aqui só mandamos o documento e os itens.
+        """
         body = {
             "client_request_id": client_request_id,
-            "receptor": receptor,
+            "doc": doc,
+            "tipo_id": tipo_id,
             "items": items,
         }
+        if nombre:
+            body["nombre"] = nombre
         if condicion:
             body["condicion"] = condicion
         if client_id:
@@ -29,6 +37,10 @@ class SifenService:
         if payment_id:
             body["payment_id"] = payment_id
         return api.post("/sifen/emitir", data=body)
+
+    def ruc_lookup(self, doc: str) -> dict:
+        """Consulta o registro DNIT: {found, estado, es_contribuyente, nombre, dv}."""
+        return api.get("/sifen/ruc-lookup", params={"doc": doc})
 
     def get_emision(self, emission_id: str) -> dict:
         return api.get(f"/sifen/emision/{emission_id}")

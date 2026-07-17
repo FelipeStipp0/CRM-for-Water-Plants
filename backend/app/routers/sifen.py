@@ -152,6 +152,20 @@ async def emitir(
     return EmissionOut.of(job)
 
 
+@router.get("/ruc-lookup")
+async def ruc_lookup(
+    doc: str,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+):
+    """
+    Consulta o registro DNIT: {found, estado, es_contribuyente, nombre, dv}.
+    Usado pelo modal (preview do nome/natureza) e pelo coordenador (resolver).
+    Regra: contribuyente = só estado ACTIVO.
+    """
+    from app.services.sifen.ruc_lookup import lookup
+    return await lookup(doc)
+
+
 @router.get("/emision/{emission_id}", response_model=EmissionOut)
 async def status_emision(
     emission_id: PydanticObjectId,

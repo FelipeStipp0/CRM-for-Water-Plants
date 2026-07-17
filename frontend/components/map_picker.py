@@ -60,7 +60,7 @@ class MapPicker(ft.Column):
             height=height,
             initial_center=ftm.MapLatitudeLongitude(init_center_lat, init_center_lon),
             initial_zoom=15.0 if self._has_initial else 5.0,
-            bgcolor="#0D1B2A",
+            bgcolor=COLORS["bg_primary"],
             interaction_configuration=ftm.InteractionConfiguration(
                 flags=ftm.InteractionFlag.ALL,
             ),

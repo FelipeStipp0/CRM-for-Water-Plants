@@ -10,7 +10,7 @@ import flet as ft
 
 from i18n import t
 
-from components.theme import COLORS, FONTS, SPACING, create_badge, create_button, create_icon_button, get_status_color
+from components.theme import COLORS, FONTS, RADIUS, SPACING, create_badge, create_button, create_icon_button, get_status_color
 
 
 class DataTable(ft.Container):
@@ -27,7 +27,7 @@ class DataTable(ft.Container):
     - hideable: can be hidden on small width (optional, default True)
     """
 
-    ACTIONS_WIDTH = 124
+    ACTIONS_WIDTH = 108
 
     def __init__(
         self,
@@ -170,7 +170,7 @@ class DataTable(ft.Container):
             content=content,
             width=width,
             expand=self._column_expand(col),
-            padding=ft.padding.symmetric(horizontal=12, vertical=8),
+            padding=ft.Padding.symmetric(horizontal=14, vertical=9),
             alignment=self._alignment(align),
             on_click=clickable,
         )
@@ -185,7 +185,7 @@ class DataTable(ft.Container):
                     ft.Text(
                         str(col.get("label", "")),
                         size=FONTS["size_sm"],
-                        weight=ft.FontWeight.BOLD,
+                        weight=ft.FontWeight.W_600,
                         color=COLORS["text_secondary"],
                         text_align=self._text_align(align),
                         overflow=ft.TextOverflow.ELLIPSIS,
@@ -200,12 +200,12 @@ class DataTable(ft.Container):
                     content=ft.Text(
                         t("table.actions"),
                         size=FONTS["size_sm"],
-                        weight=ft.FontWeight.BOLD,
+                        weight=ft.FontWeight.W_600,
                         color=COLORS["text_secondary"],
                         text_align=ft.TextAlign.CENTER,
                     ),
                     width=self.ACTIONS_WIDTH,
-                    padding=ft.padding.symmetric(horizontal=6, vertical=8),
+                    padding=ft.Padding.symmetric(horizontal=6, vertical=9),
                     alignment=ft.Alignment(0, 0),
                 )
             )
@@ -213,11 +213,12 @@ class DataTable(ft.Container):
         return ft.Container(
             content=ft.Row(cells, spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             bgcolor=COLORS["bg_elevated"],
-            border_radius=ft.border_radius.only(top_left=8, top_right=8),
+            border_radius=ft.BorderRadius.only(top_left=RADIUS["md"], top_right=RADIUS["md"]),
+            border=ft.Border.only(bottom=ft.BorderSide(1, COLORS["border"])),
         )
 
     def _build_row(self, row: dict, idx: int) -> ft.Container:
-        row_bg = COLORS["bg_primary"] if idx % 2 == 0 else COLORS["bg_secondary"]
+        row_bg = COLORS["table_row"] if idx % 2 == 0 else COLORS["table_row_alt"]
         cells: List[ft.Control] = []
 
         def row_click(_):
@@ -274,12 +275,6 @@ class DataTable(ft.Container):
                         tooltip=self.edit_tooltip,
                         color=COLORS["accent_secondary"],
                     ),
-                    ft.Container(
-                        width=1,
-                        height=20,
-                        bgcolor=COLORS["border"],
-                        margin=ft.margin.symmetric(horizontal=4),
-                    ),
                     create_icon_button(
                         self.delete_icon,
                         on_click=handle_delete,
@@ -287,14 +282,14 @@ class DataTable(ft.Container):
                         color=COLORS["accent_error"],
                     ),
                 ],
-                spacing=0,
+                spacing=2,
                 alignment=ft.MainAxisAlignment.CENTER,
             )
             cells.append(
                 ft.Container(
                     content=actions,
                     width=self.ACTIONS_WIDTH,
-                    padding=ft.padding.symmetric(horizontal=4),
+                    padding=ft.Padding.symmetric(horizontal=4),
                     alignment=ft.Alignment(0, 0),
                 )
             )
@@ -348,7 +343,7 @@ class DataTable(ft.Container):
 
     def _build_skeleton_row(self, idx: int) -> ft.Container:
         """Linha placeholder com mesma altura das linhas reais."""
-        row_bg = COLORS["bg_primary"] if idx % 2 == 0 else COLORS["bg_secondary"]
+        row_bg = COLORS["table_row"] if idx % 2 == 0 else COLORS["table_row_alt"]
         cells: List[ft.Control] = [
             self._build_skeleton_cell(col, idx, col_idx)
             for col_idx, col in enumerate(self._visible_columns)
@@ -364,7 +359,7 @@ class DataTable(ft.Container):
                         opacity=0.4,
                     ),
                     width=self.ACTIONS_WIDTH,
-                    padding=ft.padding.symmetric(horizontal=6, vertical=8),
+                    padding=ft.Padding.symmetric(horizontal=6, vertical=8),
                     alignment=ft.Alignment(0, 0),
                 )
             )
@@ -460,14 +455,14 @@ class DataTable(ft.Container):
             spacing=0,
             expand=True,
         )
-        self.bgcolor = COLORS["bg_surface"]
-        self.border_radius = 8
-        self.border = ft.Border.all(1, COLORS["border"])
+        self.bgcolor = COLORS["table_row"]
+        self.border_radius = RADIUS["md"]
+        self.border = ft.Border.all(1, COLORS["border_subtle"])
         self.expand = True
 
     def _handle_hover(self, e):
         if e.data == "true":
-            e.control.bgcolor = COLORS["bg_elevated"]
+            e.control.bgcolor = COLORS["bg_hover"]
         else:
             e.control.bgcolor = e.control.data
         try:

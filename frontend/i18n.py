@@ -30,6 +30,9 @@ ES: dict[str, str] = {
     "common.yes": "Sí",
     "common.no": "No",
     "common.confirm": "Confirmar",
+    "common.required": "Campo obligatorio.",
+    "common.min_chars": "Ingrese al menos {count} caracteres.",
+    "common.range_0_100": "Ingrese un valor entre 0 y 100.",
 
     # ----- clientes -----
     "clients.title": "Clientes",
@@ -215,6 +218,7 @@ ES: dict[str, str] = {
     "nav.clients": "Clientes",
     "nav.readings": "Lecturas",
     "nav.invoices": "Facturación",
+    "nav.products": "Productos",
     "nav.payments": "Caja",
     "nav.cutoff": "Corte",
     "nav.finance": "Finanzas",
@@ -656,11 +660,11 @@ ES: dict[str, str] = {
 
     # ----- settings: tarifas -----
     "settings.tarifa.section": "Tarifas y Subsidio",
-    "settings.tarifa.base": "Tarifa Base (Gs.)",
-    "settings.tarifa.franchise": "Franquicia (m3)",
-    "settings.tarifa.excess": "Excedente/m3 (Gs.)",
-    "settings.tarifa.min_emission": "Valor Mínimo Emisión (Gs.)",
-    "settings.tarifa.subsidy": "Subsidio Estándar (%)",
+    "settings.tarifa.base": "Tarifa Base",
+    "settings.tarifa.franchise": "Franquicia",
+    "settings.tarifa.excess": "Excedente por m³",
+    "settings.tarifa.min_emission": "Emisión Mínima",
+    "settings.tarifa.subsidy": "Subsidio",
     "settings.tarifa.hint": "Tarifa única global. Subsidio aplicado en el flujo de responsable.",
 
     # ----- settings: facturación -----
@@ -728,6 +732,9 @@ PT: dict[str, str] = {
     "common.yes": "Sim",
     "common.no": "Não",
     "common.confirm": "Confirmar",
+    "common.required": "Campo obrigatório.",
+    "common.min_chars": "Informe pelo menos {count} caracteres.",
+    "common.range_0_100": "Informe um valor entre 0 e 100.",
 
     # ----- clientes -----
     "clients.title": "Clientes",
@@ -914,6 +921,7 @@ PT: dict[str, str] = {
     "nav.clients": "Clientes",
     "nav.readings": "Leituras",
     "nav.invoices": "Faturamento",
+    "nav.products": "Produtos",
     "nav.payments": "Caixa",
     "nav.cutoff": "Corte",
     "nav.finance": "Finanças",
@@ -1355,11 +1363,11 @@ PT: dict[str, str] = {
 
     # ----- settings: tarifas -----
     "settings.tarifa.section": "Tarifas e Subsídio",
-    "settings.tarifa.base": "Tarifa Base (Gs.)",
-    "settings.tarifa.franchise": "Franquia (m3)",
-    "settings.tarifa.excess": "Excedente/m3 (Gs.)",
-    "settings.tarifa.min_emission": "Valor Mínimo Emissão (Gs.)",
-    "settings.tarifa.subsidy": "Subsídio Padrão (%)",
+    "settings.tarifa.base": "Tarifa Base",
+    "settings.tarifa.franchise": "Franquia",
+    "settings.tarifa.excess": "Excedente por m³",
+    "settings.tarifa.min_emission": "Emissão Mínima",
+    "settings.tarifa.subsidy": "Subsídio",
     "settings.tarifa.hint": "Tarifa única global. Subsídio aplicado no fluxo de responsável.",
 
     # ----- settings: facturación -----

@@ -4,7 +4,7 @@ Implementação customizada de tabs para Flet 0.80+
 """
 import flet as ft
 from typing import List, Callable
-from components.theme import COLORS, FONTS, SPACING
+from components.theme import COLORS, FONTS, RADIUS
 
 
 class TabItem:
@@ -37,20 +37,21 @@ class CustomTabs(ft.Container):
             btn_content = []
             if tab.icon:
                 btn_content.append(ft.Icon(tab.icon, size=18, 
-                    color=COLORS["accent_primary"] if is_active else COLORS["text_muted"]))
+                    color=COLORS["accent_secondary"] if is_active else COLORS["text_muted"]))
             btn_content.append(ft.Text(
                 tab.label,
                 size=FONTS["size_sm"],
                 color=COLORS["text_primary"] if is_active else COLORS["text_muted"],
-                weight=ft.FontWeight.BOLD if is_active else ft.FontWeight.NORMAL,
+                weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.NORMAL,
             ))
             
             btn = ft.Container(
                 content=ft.Row(btn_content, spacing=6, alignment=ft.MainAxisAlignment.CENTER),
-                padding=ft.padding.symmetric(horizontal=16, vertical=10),
+                padding=ft.Padding.symmetric(horizontal=14, vertical=10),
                 border=ft.Border.only(bottom=ft.BorderSide(
                     2, COLORS["accent_primary"] if is_active else "transparent"
                 )),
+                border_radius=ft.BorderRadius.only(top_left=RADIUS["sm"], top_right=RADIUS["sm"]),
                 on_click=lambda e, i=idx: self._on_tab_click(i),
                 on_hover=self._on_hover,
             )
@@ -58,7 +59,7 @@ class CustomTabs(ft.Container):
         
         tab_bar = ft.Container(
             content=ft.Row(self._tab_buttons, spacing=0),
-            border=ft.Border.only(bottom=ft.BorderSide(1, COLORS["border"])),
+            border=ft.Border.only(bottom=ft.BorderSide(1, COLORS["border_subtle"])),
         )
         
         # Content
@@ -81,7 +82,7 @@ class CustomTabs(ft.Container):
     def _on_hover(self, e):
         """Efeito hover."""
         if e.data == "true":
-            e.control.bgcolor = COLORS["bg_elevated"]
+            e.control.bgcolor = COLORS["bg_hover"]
         else:
             e.control.bgcolor = None
         e.control.update()

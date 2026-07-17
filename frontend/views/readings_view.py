@@ -12,7 +12,14 @@ from components.client_search_field import ClientSearchField
 from components.pagination import Pagination
 from components.search_bar import SearchBar
 from components.app_modal import AppModal, ModalAction
-from components.theme import COLORS, SPACING, create_button, create_header, create_text_field
+from components.theme import (
+    COLORS,
+    SPACING,
+    create_button,
+    create_header,
+    create_integer_field,
+    create_text_field,
+)
 from i18n import t
 from services.api_client import APIError
 from utils.errors import friendly_error
@@ -61,8 +68,8 @@ class ReadingsView(ft.Container):
                     print(f"[ReadingsView] page_update_fallback_error err={page_err}")
 
     def _build(self):
-        self.mes_field = create_text_field(t("readings.field.month"), value=str(self.mes), width=80)
-        self.ano_field = create_text_field(t("readings.field.year"), value=str(self.ano), width=100)
+        self.mes_field = create_integer_field(t("readings.field.month"), value=str(self.mes), width=80, max_length=2)
+        self.ano_field = create_integer_field(t("readings.field.year"), value=str(self.ano), width=100, max_length=4)
         self.manzana_filter = create_text_field(t("clients.field.block"), width=120)
 
         self.mode_tabs = ft.RadioGroup(
@@ -143,7 +150,7 @@ class ReadingsView(ft.Container):
             spacing=SPACING["sm"],
             expand=True,
         )
-        self.padding = ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["sm"])
+        self.padding = ft.Padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["md"])
         self.expand = True
 
     def _on_page_change(self, skip: int):
@@ -323,8 +330,19 @@ class ReadingsView(ft.Container):
 
         mes, ano = self._get_period()
         client_search = ClientSearchField(clients=clients, width=440, label=t("readings.field.client"))
-        valor_field = create_text_field(t("readings.field.reading_value"), width=180)
-        obs_field = create_text_field(t("readings.field.observation"), width=440)
+        valor_field = create_integer_field(
+            t("readings.field.reading_value"),
+            width=180,
+            suffix="m³",
+            autofocus=True,
+        )
+        obs_field = create_text_field(
+            t("readings.field.observation"),
+            width=440,
+            multiline=True,
+            min_lines=2,
+            max_lines=3,
+        )
         error_text = ft.Text("", color=COLORS["accent_error"], visible=False)
         _modal_ref: list[AppModal] = []
 
@@ -556,7 +574,7 @@ class ReadingsView(ft.Container):
 
         rows = []
         for item in pending[:80]:
-            value_field = create_text_field(t("readings.field.reading"), width=120)
+            value_field = create_integer_field(t("readings.field.reading"), width=120, suffix="m³")
             rows.append(
                 {
                     "client_id": item["client_id"],

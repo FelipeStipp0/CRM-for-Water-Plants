@@ -8,7 +8,7 @@ import flet as ft
 from i18n import t
 
 from components.map_picker import MapPicker
-from components.theme import COLORS, create_button
+from components.theme import COLORS
 
 
 def open_gps_picker_dialog(
@@ -45,16 +45,15 @@ def open_gps_picker_dialog(
         lon = picker.selected_lon
         if lat is None or lon is None:
             return
-        dialog.open = False
-        page.update()
+        page.pop_dialog()
         if on_confirm:
             on_confirm(lat, lon)
 
     def cancel(e):
-        dialog.open = False
-        page.update()
+        page.pop_dialog()
 
     dialog = ft.AlertDialog(
+        modal=True,
         title=ft.Text(title or t("gpspicker.title")),
         content=ft.Container(
             width=680,
@@ -65,11 +64,18 @@ def open_gps_picker_dialog(
             ),
         ),
         actions=[
-            ft.Button(content=ft.Text(t("common.cancel")), on_click=cancel),
-            ft.Button(content=ft.Text(t("gpspicker.confirm")), on_click=confirm),
+            ft.TextButton(content=ft.Text(t("common.cancel")), on_click=cancel),
+            ft.FilledButton(
+                content=ft.Text(t("gpspicker.confirm")),
+                on_click=confirm,
+                style=ft.ButtonStyle(
+                    bgcolor=COLORS["accent_primary"],
+                    color=COLORS["text_primary"],
+                ),
+            ),
         ],
+        actions_alignment=ft.MainAxisAlignment.END,
+        scrollable=True,
     )
 
-    page.overlay.append(dialog)
-    dialog.open = True
-    page.update()
+    page.show_dialog(dialog)

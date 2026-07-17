@@ -10,6 +10,7 @@ from components.custom_tabs import CustomTabs, TabItem
 from components.data_table import DataTable
 from components.loading_overlay import LoadingOverlay
 from components.app_modal import AppModal, ModalAction
+from components.sifen_emit import open_sifen_emit_modal
 from components.theme import COLORS, SPACING, create_button, create_header, create_text_field
 from services.api_client import APIError
 from utils.errors import friendly_error
@@ -143,6 +144,7 @@ class FinanceView(ft.Container):
             [
                 create_header(t("finance.title")),
                 ft.Container(expand=True),
+                create_button("Factura electrónica", icon=ft.Icons.RECEIPT_LONG, on_click=self._open_sifen_modal, primary=False),
                 create_button("Atualizar", icon=ft.Icons.REFRESH, on_click=lambda e: self._run_load_all(), primary=False),
             ]
         )
@@ -224,13 +226,16 @@ class FinanceView(ft.Container):
         self.loading_overlay = LoadingOverlay(t("finance.loading"))
         self.content = ft.Stack(
             [
-                ft.Column([header, ft.Container(height=SPACING["md"]), tabs], expand=True),
+                ft.Column([header, tabs], spacing=SPACING["md"], expand=True),
                 self.loading_overlay,
             ],
             expand=True,
         )
-        self.padding = ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["sm"])
+        self.padding = ft.Padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["md"])
         self.expand = True
+
+    def _open_sifen_modal(self, e):
+        open_sifen_emit_modal(self.page, self.show_snackbar)
 
     def _build_action_bar(self, controls: list[ft.Control]) -> ft.Control:
         return ft.Container(
@@ -241,16 +246,16 @@ class FinanceView(ft.Container):
                 run_spacing=SPACING["sm"],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=12, vertical=10),
-            bgcolor=COLORS["bg_elevated"],
-            border=ft.Border.all(1, COLORS["border"]),
-            border_radius=10,
+            padding=ft.Padding.symmetric(horizontal=14, vertical=12),
+            bgcolor=COLORS["bg_surface"],
+            border=ft.Border.all(1, COLORS["border_subtle"]),
+            border_radius=12,
         )
 
     def _build_metric_card(self, title: str, value_control: ft.Control, accent_color: str, icon: str) -> ft.Control:
         return ft.Container(
-            width=250,
-            padding=ft.padding.symmetric(horizontal=14, vertical=12),
+            expand=True,
+            padding=ft.Padding.symmetric(horizontal=14, vertical=12),
             bgcolor=COLORS["bg_surface"],
             border=ft.Border.all(1, COLORS["border"]),
             border_radius=10,
@@ -272,7 +277,7 @@ class FinanceView(ft.Container):
 
     def _build_cash_report_panel(self) -> ft.Control:
         return ft.Container(
-            padding=ft.padding.symmetric(horizontal=14, vertical=12),
+            padding=ft.Padding.symmetric(horizontal=14, vertical=12),
             bgcolor=COLORS["bg_surface"],
             border=ft.Border.all(1, COLORS["border"]),
             border_radius=10,
@@ -308,7 +313,7 @@ class FinanceView(ft.Container):
             ],
             spacing=SPACING["sm"],
             run_spacing=SPACING["sm"],
-            wrap=True,
+            wrap=False,
         )
 
         actions = self._build_action_bar(
@@ -321,13 +326,13 @@ class FinanceView(ft.Container):
 
         return ft.Column(
             [
-                ft.Container(height=SPACING["md"]),
+                ft.Container(height=SPACING["sm"]),
                 summary_cards,
-                ft.Container(height=SPACING["md"]),
+                ft.Container(height=SPACING["sm"]),
                 actions,
-                ft.Container(height=SPACING["md"]),
+                ft.Container(height=SPACING["sm"]),
                 self._build_cash_report_panel(),
-                ft.Container(height=SPACING["md"]),
+                ft.Container(height=SPACING["sm"]),
                 self.transactions_table,
             ],
             expand=True,
@@ -436,7 +441,7 @@ class FinanceView(ft.Container):
                     count = int(item.get("count", 0) or 0)
                     rows.append(
                         ft.Container(
-                            padding=ft.padding.symmetric(horizontal=10, vertical=8),
+                            padding=ft.Padding.symmetric(horizontal=10, vertical=8),
                             bgcolor=COLORS["bg_elevated"],
                             border_radius=8,
                             border=ft.Border.all(1, COLORS["border"]),
@@ -983,7 +988,7 @@ class FinanceView(ft.Container):
             visible=False,
             bgcolor=f"{COLORS['accent_warning']}22",
             border_radius=6,
-            padding=ft.padding.symmetric(horizontal=10, vertical=6),
+            padding=ft.Padding.symmetric(horizontal=10, vertical=6),
         )
         error_text = ft.Text("", color=COLORS["accent_error"], visible=False)
 

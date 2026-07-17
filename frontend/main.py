@@ -13,6 +13,7 @@ _wmapp_job_handle = None
 
 
 _BRANDED_CLIENT_NAME = "Saneo"  # nome do exe e da pasta no LOCALAPPDATA
+_BRANDED_CLIENT_CACHE_VERSION = "flet-0.86-launcher-v3"
 
 
 _LANG_EN_US = 1033  # Mesma lang usada pelo Flet ao gravar resources do flet.exe
@@ -209,9 +210,10 @@ def _patch_version_info_blob(blob: bytes, overrides: dict) -> bytes | None:
 
 
 def _setup_branded_flet_client():
-    """Substitui o flet.exe oficial por uma copia chamada Saneo.exe com
-    nosso icone. O processo visivel na barra de tarefas e no gerenciador
-    de tarefas passa a ser 'Saneo', nao 'flet'.
+    """Configura o cliente desktop branded legado (Flet anterior ao 0.86).
+
+    No Flet 0.86+ o runner oficial precisa manter o nome ``flet.exe``; nesse
+    caso o branding é aplicado em runtime e esta função retorna sem monkey-patch.
 
     Cacheia em %LOCALAPPDATA%/Saneo/client-{flet_version}/. So roda a copia
     pesada na primeira execucao apos atualizar o Flet.
@@ -220,6 +222,20 @@ def _setup_branded_flet_client():
     spawnado."""
     if os.name != "nt":
         return
+    try:
+        from importlib.metadata import version
+
+        major, minor = (
+            int(part) for part in version("flet").split(".")[:2]
+        )
+        if (major, minor) >= (0, 86):
+            # O runner 0.86 usa o nome do executável no bootstrap. Renomeá-lo
+            # conecta ao socket, mas não cria janela. Mantemos branding por
+            # AppUserModelID + page.title + page.window.icon e usamos o cliente
+            # oficial em FLET_APP_HIDDEN.
+            return
+    except Exception:
+        pass
     try:
         from flet_desktop import ensure_client_cached
         import flet_desktop as fd
@@ -253,6 +269,8 @@ def _setup_branded_flet_client():
         not marker.exists()
         or not out_exe.exists()
         or out_exe.stat().st_mtime < src_exe.stat().st_mtime
+        or marker.read_text(encoding="utf-8", errors="ignore")
+        != _BRANDED_CLIENT_CACHE_VERSION
     )
 
     if need_build:
@@ -274,16 +292,11 @@ def _setup_branded_flet_client():
                     shutil.copy2(item, dst)
             # Copia o exe ja com o novo nome.
             shutil.copy2(src_exe, out_exe)
-            try:
-                _patch_exe_icon(str(out_exe), str(icon_path))
-            except Exception as err:
-                _ORIGINAL_PRINT(f"[WMApp] icon_patch_error err={err}")
-            try:
-                _patch_exe_version_info(str(out_exe))
-            except Exception as err:
-                _ORIGINAL_PRINT(f"[WMApp] versioninfo_patch_error err={err}")
+            # Não reescrever recursos PE no runner 0.86+: BeginUpdateResource
+            # produz um executável que conecta ao socket, mas não cria janela.
+            # Nome, título e ícone são aplicados de forma segura em runtime.
 
-            marker.write_text("ok", encoding="utf-8")
+            marker.write_text(_BRANDED_CLIENT_CACHE_VERSION, encoding="utf-8")
         except Exception as err:
             _ORIGINAL_PRINT(f"[WMApp] flet_rebrand_build_error err={err}")
             return
@@ -294,21 +307,7 @@ def _setup_branded_flet_client():
         import tempfile
         from flet.utils import random_string
 
-        # FLET_HIDE_WINDOW_ON_START e bugado no Flet 0.80+ (issues #3223 e
-        # #5216 do repo). A janela ainda aparece com o titulo default "Flet"
-        # antes do page.title chegar. A solucao confiavel e via Win32: passa
-        # STARTUPINFO com wShowWindow=SW_HIDE direto pro CreateProcess.
-        # O Flutter usa o nCmdShow do WinMain ao chamar ShowWindow inicial,
-        # entao a janela nasce escondida no nivel do SO - independe do Flet.
-        # Quando Python eventualmente chama page.window.visible=True, o lado
-        # Dart do Flet chama window.show() que revela com o titulo ja correto.
-        def _build_hidden_startupinfo():
-            si = subprocess.STARTUPINFO()
-            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            si.wShowWindow = subprocess.SW_HIDE
-            return si
-
-        def _branded_open(page_url, assets_dir, _hidden):
+        def _branded_open(page_url, assets_dir, hidden):
             pid_file = str(
                 Path(tempfile.gettempdir()).joinpath(random_string(20))
             )
@@ -316,45 +315,14 @@ def _setup_branded_flet_client():
             if assets_dir:
                 args.append(assets_dir)
             env = {**os.environ}
-            env["FLET_HIDE_WINDOW_ON_START"] = "true"
+            if hidden:
+                env["FLET_HIDE_WINDOW_ON_START"] = "true"
             return (
-                subprocess.Popen(
-                    args, env=env, startupinfo=_build_hidden_startupinfo()
-                ),
+                subprocess.Popen(args, env=env),
                 pid_file,
             )
 
-        # asyncio.create_subprocess_exec nao aceita STARTUPINFO; envelopa
-        # uma Popen sincrona para parecer asyncio.subprocess.Process (so
-        # precisamos de .wait() awaitable - o resto da API que o Flet usa
-        # delega direto pra Popen).
-        class _AsyncPopen:
-            def __init__(self, popen):
-                self._popen = popen
-                self.pid = popen.pid
-                self.returncode = None
-
-            async def wait(self):
-                import asyncio
-                rc = await asyncio.get_event_loop().run_in_executor(
-                    None, self._popen.wait
-                )
-                self.returncode = rc
-                return rc
-
-            def terminate(self):
-                try:
-                    self._popen.terminate()
-                except Exception:
-                    pass
-
-            def kill(self):
-                try:
-                    self._popen.kill()
-                except Exception:
-                    pass
-
-        async def _branded_open_async(page_url, assets_dir, _hidden):
+        async def _branded_open_async(page_url, assets_dir, hidden):
             import asyncio
             pid_file = str(
                 Path(tempfile.gettempdir()).joinpath(random_string(20))
@@ -363,15 +331,14 @@ def _setup_branded_flet_client():
             if assets_dir:
                 args.append(assets_dir)
             env = {**os.environ}
-            env["FLET_HIDE_WINDOW_ON_START"] = "true"
-            loop = asyncio.get_event_loop()
-            popen = await loop.run_in_executor(
-                None,
-                lambda: subprocess.Popen(
-                    args, env=env, startupinfo=_build_hidden_startupinfo()
-                ),
+            if hidden:
+                env["FLET_HIDE_WINDOW_ON_START"] = "true"
+            popen = await asyncio.create_subprocess_exec(
+                args[0],
+                *args[1:],
+                env=env,
             )
-            return _AsyncPopen(popen), pid_file
+            return popen, pid_file
 
         fd.open_flet_view = _branded_open
         fd.open_flet_view_async = _branded_open_async
@@ -455,7 +422,7 @@ builtins.print = _wmapp_filtered_print
 
 from components.sidebar import Sidebar
 from components.status_bar import StatusBar
-from components.theme import COLORS, SPACING
+from components.theme import COLORS, SPACING, create_app_theme
 import i18n
 from i18n import t
 from services.auth_service import auth_service
@@ -466,13 +433,13 @@ from views.map_view import MapView
 from views.cutoff_view import CutoffView
 from views.finance_view import FinanceView
 from views.invoices_view import InvoicesView
+from views.products_view import ProductsView
 from views.login_view import LoginView
 from views.payments_view import PaymentsView
 from views.readings_view import ReadingsView
 from views.profile_view import ProfileView
 from views.about_view import AboutView
 from views.settings_view import SettingsView
-from views.sifen_view import SifenView
 from views.sponsors_view import SponsorsView
 
 
@@ -523,6 +490,8 @@ class WMApp:
         """Configura a pagina. Comeca pequena (tamanho da splash)."""
         self.page.title = "Saneo - Sistema de Saneamiento"
         self.page.bgcolor = COLORS["bg_primary"]
+        self.page.theme_mode = ft.ThemeMode.DARK
+        self.page.theme = create_app_theme()
         self.page.padding = 0
         self.page.spacing = 0
         # Janela comeca pequena para acomodar splash/login. Vira self.MAIN_*
@@ -901,15 +870,12 @@ class WMApp:
             "/clients": lambda: ClientsView(show_snackbar=self.show_snackbar),
             "/readings": lambda: ReadingsView(show_snackbar=self.show_snackbar),
             "/invoices": lambda: InvoicesView(show_snackbar=self.show_snackbar),
+            "/products": lambda: ProductsView(show_snackbar=self.show_snackbar),
             "/payments": lambda: PaymentsView(show_snackbar=self.show_snackbar),
             "/cutoff": lambda: CutoffView(show_snackbar=self.show_snackbar),
             "/finance": lambda: FinanceView(show_snackbar=self.show_snackbar),
             "/sponsors": lambda: SponsorsView(show_snackbar=self.show_snackbar),
             "/map": lambda: MapView(),
-            "/sifen": lambda: SifenView(
-                show_snackbar=self.show_snackbar,
-                current_user=self.current_user,
-            ),
             "/settings": lambda: self._settings_view or SettingsView(
                 show_snackbar=self.show_snackbar,
                 on_printer_change=self._on_printer_change,
@@ -1075,12 +1041,16 @@ if __name__ == "__main__":
     # Flutter ja foi spawnada fora do job e nao herda o kill-on-close.
     _bind_to_job_kill_on_close()
 
-    # Substitui o flet.exe pela copia branded "Saneo.exe" antes do ft.run.
-    # Tem que ser nesta ordem: o monkey-patch precisa estar em pe quando
-    # ft.run chamar open_flet_view internamente.
+    # Em Flet < 0.86, substitui o flet.exe pela copia branded antes do ft.run.
+    # Em 0.86+, a função preserva o runner oficial e o branding é aplicado
+    # por título/ícone/AppUserModelID.
     _setup_branded_flet_client()
 
     # assets_dir habilita ft.Image(src="saneo.png") a partir de frontend/assets
     # (logo no sidebar e na tela de login). Funciona em dev e no bundle PyInstaller.
     _assets_dir = str(Path(__file__).resolve().parent / "assets")
-    ft.run(main, assets_dir=_assets_dir)
+    ft.run(
+        main,
+        assets_dir=_assets_dir,
+        view=ft.AppView.FLET_APP_HIDDEN,
+    )

@@ -39,7 +39,7 @@ class MiniClientSearch(ft.Column):
             border_color=COLORS["border"],
             focused_border_color=COLORS["accent_primary"],
             border_radius=6,
-            content_padding=ft.padding.symmetric(horizontal=8, vertical=6),
+            content_padding=ft.Padding.symmetric(horizontal=8, vertical=6),
             expand=True,
             on_change=self._on_change,
             suffix=ft.Icon(ft.Icons.CLOSE, color=COLORS["text_muted"], size=14) if initial_client else ft.Icon(ft.Icons.SEARCH, color=COLORS["text_muted"], size=14),
@@ -51,7 +51,7 @@ class MiniClientSearch(ft.Column):
             content=self._results_list,
             bgcolor=COLORS["bg_elevated"],
             border=ft.Border.all(1, COLORS["border"]),
-            border_radius=ft.border_radius.only(bottom_left=6, bottom_right=6),
+            border_radius=ft.BorderRadius.only(bottom_left=6, bottom_right=6),
             visible=False,
             shadow=ft.BoxShadow(
                 blur_radius=6,
@@ -121,14 +121,14 @@ class MiniClientSearch(ft.Column):
             self._results_list.controls.append(
                 ft.Container(
                     content=ft.Text("Sem resultados", color=COLORS["text_muted"], size=11, italic=True),
-                    padding=ft.padding.symmetric(horizontal=10, vertical=8),
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=8),
                 )
             )
         else:
             # Opção para remover vínculo
             clear_item = ft.Container(
                 content=ft.Text("— Sem cliente —", color=COLORS["text_muted"], size=11, italic=True),
-                padding=ft.padding.symmetric(horizontal=10, vertical=7),
+                padding=ft.Padding.symmetric(horizontal=10, vertical=7),
                 on_click=self._clear_selection,
                 ink=True,
             )
@@ -155,7 +155,7 @@ class MiniClientSearch(ft.Column):
                         spacing=1,
                         tight=True,
                     ),
-                    padding=ft.padding.symmetric(horizontal=10, vertical=6),
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=6),
                     on_click=make_click(c),
                     on_hover=lambda ev: setattr(ev.control, 'bgcolor', COLORS["bg_surface"] if ev.data == "true" else None) or ev.control.update(),
                     ink=True,
@@ -166,7 +166,7 @@ class MiniClientSearch(ft.Column):
                 self._results_list.controls.append(
                     ft.Container(
                         content=ft.Text(f"+{total - self.MAX_RESULTS} mais. Refine a busca.", color=COLORS["text_muted"], size=10, italic=True),
-                        padding=ft.padding.symmetric(horizontal=10, vertical=5),
+                        padding=ft.Padding.symmetric(horizontal=10, vertical=5),
                     )
                 )
 

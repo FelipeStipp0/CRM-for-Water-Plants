@@ -86,7 +86,7 @@ class DashboardView(ft.Container):
 
     def _build_metric_card(self, title: str, value_control: ft.Text, subtitle_control: ft.Text, icon: str, route: str | None = None):
         return ft.Container(
-            padding=ft.padding.symmetric(horizontal=14, vertical=12),
+            padding=ft.Padding.symmetric(horizontal=14, vertical=12),
             bgcolor=COLORS["bg_surface"],
             border=ft.Border.all(1, COLORS["border"]),
             border_radius=10,
@@ -156,7 +156,7 @@ class DashboardView(ft.Container):
         )
 
         quick_actions = ft.Container(
-            padding=ft.padding.symmetric(horizontal=12, vertical=10),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
             bgcolor=COLORS["bg_elevated"],
             border=ft.Border.all(1, COLORS["border"]),
             border_radius=10,
@@ -191,7 +191,7 @@ class DashboardView(ft.Container):
 
         alerts_panel = ft.Container(
             expand=True,
-            padding=ft.padding.symmetric(horizontal=12, vertical=10),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
             bgcolor=COLORS["bg_surface"],
             border=ft.Border.all(1, COLORS["border"]),
             border_radius=10,
@@ -206,7 +206,7 @@ class DashboardView(ft.Container):
 
         recent_panel = ft.Container(
             expand=True,
-            padding=ft.padding.symmetric(horizontal=12, vertical=10),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
             bgcolor=COLORS["bg_surface"],
             border=ft.Border.all(1, COLORS["border"]),
             border_radius=10,
@@ -221,7 +221,7 @@ class DashboardView(ft.Container):
 
         pending_panel = ft.Container(
             expand=True,
-            padding=ft.padding.symmetric(horizontal=12, vertical=10),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
             bgcolor=COLORS["bg_surface"],
             border=ft.Border.all(1, COLORS["border"]),
             border_radius=10,
@@ -261,7 +261,7 @@ class DashboardView(ft.Container):
             ],
             expand=True,
         )
-        self.padding = ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["sm"])
+        self.padding = ft.Padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["md"])
         self.bgcolor = COLORS["bg_primary"]
         self.expand = True
 

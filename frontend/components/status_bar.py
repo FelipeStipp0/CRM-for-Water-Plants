@@ -45,7 +45,7 @@ class StatusBar(ft.Container):
                 # Impressora Térmica
                 ft.Row(
                     [
-                        ft.Icon(ft.Icons.PRINT, size=16, color=thermal_color),
+                        ft.Icon(ft.Icons.PRINT_OUTLINED, size=14, color=thermal_color),
                         ft.Text(t("status.thermal", value=thermal_text), size=FONTS["size_xs"], color=COLORS["text_secondary"]),
                     ],
                     spacing=4,
@@ -54,7 +54,7 @@ class StatusBar(ft.Container):
                 # Impressora A4
                 ft.Row(
                     [
-                        ft.Icon(ft.Icons.PRINT, size=16, color=a4_color),
+                        ft.Icon(ft.Icons.PRINT_OUTLINED, size=14, color=a4_color),
                         ft.Text(t("status.a4", value=a4_text), size=FONTS["size_xs"], color=COLORS["text_secondary"]),
                     ],
                     spacing=4,
@@ -64,7 +64,7 @@ class StatusBar(ft.Container):
                 # Usuário
                 ft.Row(
                     [
-                        ft.Icon(ft.Icons.PERSON, size=16, color=COLORS["text_secondary"]),
+                        ft.Icon(ft.Icons.PERSON_OUTLINE, size=14, color=COLORS["text_muted"]),
                         ft.Text(self.username or t("status.not_logged"), size=FONTS["size_xs"], color=COLORS["text_secondary"]),
                     ],
                     spacing=4,
@@ -73,19 +73,19 @@ class StatusBar(ft.Container):
                 # Relógio
                 ft.Row(
                     [
-                        ft.Icon(ft.Icons.SCHEDULE, size=16, color=COLORS["text_secondary"]),
+                        ft.Icon(ft.Icons.SCHEDULE, size=14, color=COLORS["text_muted"]),
                         self._clock_text,
                     ],
                     spacing=4,
                 ),
             ],
-            spacing=SPACING["md"],
+            spacing=12,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
         
         self.bgcolor = COLORS["bg_secondary"]
-        self.padding = ft.padding.symmetric(horizontal=SPACING["md"], vertical=SPACING["sm"])
-        self.border = ft.border.only(top=ft.BorderSide(1, COLORS["border"]))
+        self.padding = ft.Padding.symmetric(horizontal=SPACING["md"], vertical=6)
+        self.border = ft.Border.only(top=ft.BorderSide(1, COLORS["border_subtle"]))
     
     def update_user(self, username: str):
         """Atualiza nome do usuário."""

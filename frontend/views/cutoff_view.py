@@ -246,7 +246,7 @@ class CutoffView(ft.Container):
             ],
             expand=True,
         )
-        self.padding = ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["sm"])
+        self.padding = ft.Padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["md"])
         self.expand = True
 
     def _action_bar(self, left: list | None = None, right: list | None = None) -> ft.Control:
@@ -275,7 +275,7 @@ class CutoffView(ft.Container):
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=12, vertical=10),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
             bgcolor=COLORS["bg_elevated"],
             border=ft.Border.all(1, COLORS["border"]),
             border_radius=10,
@@ -287,7 +287,7 @@ class CutoffView(ft.Container):
         # pequenas), fica numa Row separada que envolve naturalmente.
         return ft.Container(
             content=ft.Text(message, color=COLORS["text_muted"], size=12, italic=True),
-            padding=ft.padding.only(left=4, right=4, bottom=2),
+            padding=ft.Padding.only(left=4, right=4, bottom=2),
         )
 
     def _build_candidates_tab(self) -> ft.Control:

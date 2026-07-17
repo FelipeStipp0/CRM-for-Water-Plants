@@ -10,7 +10,7 @@ Duas naturezas (Manual v150, grupo D + payload real do portal):
 Documento SEM dígito verificador: só os 7 (física) ou 8 (jurídica) números do RUC.
 """
 
-from typing import Optional
+from typing import Callable, Optional
 
 # iTipIDRec (D210) — tipos de identificação do receptor no contribuyente
 TIPO_ID_DESC = {
@@ -95,24 +95,51 @@ def _dv_int(v) -> Optional[int]:
     return int(v) if v is not None and str(v).isdigit() else None
 
 
-def resolver_receptor(provider, doc: str, *, email: Optional[str] = None, tipo_id: int = 1) -> dict:
+def resolver_receptor(
+    provider,
+    doc: str,
+    *,
+    email: Optional[str] = None,
+    tipo_id: int = 1,
+    nombre: Optional[str] = None,
+    ruc_lookup: Optional[Callable[[str], dict]] = None,
+) -> dict:
     """
-    Classifica e monta o receptor consultando o portal:
-      1) /contribuyente  -> tem RUC/DV  => contribuinte (RUC)
-      2) /ciudadano      -> cédula      => no contribuyente (CI) + nome
-      3) nada            -> innominado
+    Classifica e monta o receptor.
+
+    Contribuyente (RUC) vem do **registro DNIT** via `ruc_lookup(doc)` — regra
+    Solo ACTIVO: só `es_contribuyente` (estado ACTIVO) vira RUC (com DV). Se
+    `ruc_lookup` não for passado, cai no legado (portal `/contribuyente`), preservando
+    os testes/uso antigo.
+
+    No contribuyente (CI sem DV): o nome vem do cadastro do cliente (`nombre`), senão
+    do portal `/ciudadano`, senão innominado. RUC cancelado/suspenso → no contribuyente.
 
     `provider` cumpre SifenProvider (login já feito). `email` sobrescreve o do cadastro.
     """
     num = _solo_digitos(doc)
 
-    gd = provider.contribuyente(num)
-    if gd and (gd.get("razonSocial") or gd.get("dv") is not None):
-        return build_receptor(
-            True, num, gd.get("razonSocial") or "",
-            email=(gd.get("correoElectronico") or email),
-            dv=_dv_int(gd.get("dv")),
-        )
+    # 1) contribuyente (RUC ACTIVO) — preferir o registro DNIT local
+    if ruc_lookup is not None:
+        r = ruc_lookup(num) or {}
+        if r.get("es_contribuyente"):
+            return build_receptor(
+                True, num, (r.get("nombre") or nombre or "").strip(),
+                email=email, dv=_dv_int(r.get("dv")),
+            )
+        # achou porém cancelado/suspenso, ou não achou → no contribuyente (abaixo)
+    else:
+        gd = provider.contribuyente(num)
+        if gd and (gd.get("razonSocial") or gd.get("dv") is not None):
+            return build_receptor(
+                True, num, gd.get("razonSocial") or "",
+                email=(gd.get("correoElectronico") or email),
+                dv=_dv_int(gd.get("dv")),
+            )
+
+    # 2) no contribuyente — nome do cadastro, senão portal, senão innominado
+    if nombre and nombre.strip():
+        return build_receptor(False, num, nombre.strip(), email=email, tipo_id=tipo_id)
 
     gd = provider.ciudadano(num)
     if gd and gd.get("razonSocial"):

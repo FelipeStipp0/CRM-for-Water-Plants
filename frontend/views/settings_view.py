@@ -9,7 +9,20 @@ import flet as ft
 
 from components.loading_overlay import LoadingOverlay
 from components.app_modal import AppModal, ModalAction
-from components.theme import COLORS, FONTS, SPACING, create_button, create_header, create_text_field
+from components.sifen_config import SifenConfigPanel
+from components.theme import (
+    COLORS,
+    FONTS,
+    RADIUS,
+    SPACING,
+    create_button,
+    create_header,
+    create_integer_field,
+    create_money_field,
+    create_percent_field,
+    create_phone_field,
+    create_text_field,
+)
 from config.local_settings import (
     get_invoice_print_format,
     get_printer,
@@ -59,6 +72,9 @@ class SettingsView(ft.Container):
 
         self._logo_b64: str = ""   # cache local do base64 carregado do backend
 
+        # painel de facturación electrónica (creds + dispositivos)
+        self._sifen_panel = SifenConfigPanel(show_snackbar, current_user=self.current_user)
+
         self._build()
 
         self.on_visible = self._on_visible
@@ -82,6 +98,7 @@ class SettingsView(ft.Container):
     def trigger_initial_load(self):
         self._load_settings_safe()
         self._load_printers()
+        self._sifen_panel.load()
         if self._is_master():
             self._load_users()
 
@@ -241,9 +258,9 @@ class SettingsView(ft.Container):
         # Section: Junta/company data
         self.junta_fields = {
             "nombre_junta": create_text_field(t("settings.junta.name"), width=420),
-            "ruc_junta": create_text_field(t("settings.junta.ruc"), width=220),
+            "ruc_junta": create_text_field(t("settings.junta.ruc"), width=220, max_length=20),
             "direccion_junta": create_text_field(t("settings.junta.address"), width=420),
-            "telefono_junta": create_text_field(t("settings.junta.phone"), width=220),
+            "telefono_junta": create_phone_field(t("settings.junta.phone"), width=220, max_length=30),
             "actividad": create_text_field(t("settings.junta.activity"), width=420),
         }
         logo_section_content = ft.Row(
@@ -286,8 +303,8 @@ class SettingsView(ft.Container):
             t("settings.junta.section"),
             ft.Icons.BUSINESS,
             [
-                ft.Row([self.junta_fields["nombre_junta"], self.junta_fields["ruc_junta"]], spacing=8),
-                ft.Row([self.junta_fields["direccion_junta"], self.junta_fields["telefono_junta"]], spacing=8),
+                ft.Row([self.junta_fields["nombre_junta"], self.junta_fields["ruc_junta"]], spacing=12, run_spacing=12, wrap=True),
+                ft.Row([self.junta_fields["direccion_junta"], self.junta_fields["telefono_junta"]], spacing=12, run_spacing=12, wrap=True),
                 ft.Row([self.junta_fields["actividad"]], spacing=8),
                 ft.Divider(height=1, color=COLORS["border"]),
                 logo_section_content,
@@ -296,17 +313,17 @@ class SettingsView(ft.Container):
 
         # Section: Global tariff/subsidy
         self.tarifa_fields = {
-            "tarifa_base": create_text_field(t("settings.tarifa.base"), width=160),
-            "consumo_minimo": create_text_field(t("settings.tarifa.franchise"), width=160),
-            "valor_excedente_m3": create_text_field(t("settings.tarifa.excess"), width=160),
-            "valor_minimo_emissao": create_text_field(t("settings.tarifa.min_emission"), width=180),
-            "subsidio_porcentagem_padrao": create_text_field(t("settings.tarifa.subsidy"), width=160),
+            "tarifa_base": create_money_field(t("settings.tarifa.base"), col={"sm": 12, "md": 6, "lg": 4, "xl": 2}),
+            "consumo_minimo": create_integer_field(t("settings.tarifa.franchise"), suffix="m³", col={"sm": 12, "md": 6, "lg": 4, "xl": 2}),
+            "valor_excedente_m3": create_money_field(t("settings.tarifa.excess"), col={"sm": 12, "md": 6, "lg": 4, "xl": 3}),
+            "valor_minimo_emissao": create_money_field(t("settings.tarifa.min_emission"), col={"sm": 12, "md": 6, "lg": 4, "xl": 3}),
+            "subsidio_porcentagem_padrao": create_percent_field(t("settings.tarifa.subsidy"), col={"sm": 12, "md": 6, "lg": 4, "xl": 2}),
         }
         tarifas_section = self._section(
             t("settings.tarifa.section"),
             ft.Icons.ATTACH_MONEY,
             [
-                ft.Row(
+                ft.ResponsiveRow(
                     [
                         self.tarifa_fields["tarifa_base"],
                         self.tarifa_fields["consumo_minimo"],
@@ -314,7 +331,9 @@ class SettingsView(ft.Container):
                         self.tarifa_fields["valor_minimo_emissao"],
                         self.tarifa_fields["subsidio_porcentagem_padrao"],
                     ],
-                    spacing=8,
+                    columns=12,
+                    spacing=12,
+                    run_spacing=12,
                 ),
                 ft.Text(
                     t("settings.tarifa.hint"),
@@ -325,8 +344,8 @@ class SettingsView(ft.Container):
         )
 
         self.faturamento_fields = {
-            "dia_geracao_faturas": create_text_field(t("settings.billing.gen_day"), width=220),
-            "dias_vencimiento": create_text_field(t("settings.billing.due_days"), width=220),
+            "dia_geracao_faturas": create_integer_field(t("settings.billing.gen_day"), width=220, max_length=2),
+            "dias_vencimiento": create_integer_field(t("settings.billing.due_days"), width=220, max_length=3),
         }
         self.gerar_sem_leitura_cb = ft.Checkbox(
             label=t("settings.billing.gen_without_reading"),
@@ -353,7 +372,9 @@ class SettingsView(ft.Container):
                         self.faturamento_fields["dia_geracao_faturas"],
                         self.faturamento_fields["dias_vencimiento"],
                     ],
-                    spacing=8,
+                    spacing=12,
+                    run_spacing=12,
+                    wrap=True,
                 ),
                 self.gerar_sem_leitura_cb,
                 ft.Row(
@@ -370,10 +391,10 @@ class SettingsView(ft.Container):
 
         # Section: Cutoff parameters
         self.corte_fields = {
-            "meses_atraso_corte": create_text_field(t("settings.cutoff.months"), width=220),
-            "dias_prazo_aviso": create_text_field(t("settings.cutoff.notice_days"), width=220),
-            "taxa_reativacao": create_text_field(t("settings.cutoff.reactivation_fee"), width=220),
-            "multa": create_text_field(t("settings.cutoff.multa"), width=220),
+            "meses_atraso_corte": create_integer_field(t("settings.cutoff.months"), width=210, max_length=2),
+            "dias_prazo_aviso": create_integer_field(t("settings.cutoff.notice_days"), width=210, max_length=3),
+            "taxa_reativacao": create_money_field(t("settings.cutoff.reactivation_fee"), width=230),
+            "multa": create_money_field(t("settings.cutoff.multa"), width=220),
         }
         corte_section = self._section(
             t("settings.cutoff.section"),
@@ -386,7 +407,9 @@ class SettingsView(ft.Container):
                         self.corte_fields["taxa_reativacao"],
                         self.corte_fields["multa"],
                     ],
-                    spacing=8,
+                    spacing=12,
+                    run_spacing=12,
+                    wrap=True,
                 ),
             ],
         )
@@ -436,10 +459,10 @@ class SettingsView(ft.Container):
 
         # System save section (clear separation from printer settings)
         save_system_section = ft.Container(
-            padding=12,
-            bgcolor=COLORS["bg_elevated"],
-            border=ft.Border.all(1, COLORS["border"]),
-            border_radius=8,
+            padding=16,
+            bgcolor=COLORS["bg_surface"],
+            border=ft.Border.all(1, COLORS["border_subtle"]),
+            border_radius=RADIUS["lg"],
             content=ft.Row(
                 [
                     ft.Text(
@@ -488,7 +511,7 @@ class SettingsView(ft.Container):
             t("settings.printers.section"),
             ft.Icons.PRINT,
             [
-                ft.Row([self.printer_thermal_dropdown, self.printer_a4_dropdown], spacing=8),
+                ft.Row([self.printer_thermal_dropdown, self.printer_a4_dropdown], spacing=12, run_spacing=12, wrap=True),
                 ft.Row([self.invoice_format_dropdown], spacing=8),
                 ft.Row(
                     [
@@ -543,6 +566,12 @@ class SettingsView(ft.Container):
                 ],
             )
 
+        sifen_section = self._section(
+            "Facturación Electrónica",
+            ft.Icons.RECEIPT_LONG,
+            [self._sifen_panel],
+        )
+
         sections = [
             junta_section,
             tarifas_section,
@@ -551,6 +580,7 @@ class SettingsView(ft.Container):
             banco_section,
             save_system_section,
             impressoras_section,
+            sifen_section,
         ]
         if users_admin_section is not None:
             sections.append(users_admin_section)
@@ -561,7 +591,7 @@ class SettingsView(ft.Container):
                 ft.Container(height=SPACING["sm"]),
                 ft.Column(
                     sections,
-                    spacing=12,
+                    spacing=SPACING["md"],
                     expand=True,
                 ),
             ],
@@ -576,7 +606,7 @@ class SettingsView(ft.Container):
             ],
             expand=True,
         )
-        self.padding = SPACING["md"]
+        self.padding = ft.Padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["md"])
         self.expand = True
 
     def _section(self, title: str, icon, content_rows: list) -> ft.Container:
@@ -585,7 +615,7 @@ class SettingsView(ft.Container):
                 [
                     ft.Row(
                         [
-                            ft.Icon(icon, size=18, color=COLORS["accent_primary"]),
+                            ft.Icon(icon, size=18, color=COLORS["accent_secondary"]),
                             ft.Text(
                                 title,
                                 size=FONTS["size_base"],
@@ -593,16 +623,16 @@ class SettingsView(ft.Container):
                                 color=COLORS["text_primary"],
                             ),
                         ],
-                        spacing=6,
+                        spacing=8,
                     ),
-                    ft.Column(content_rows, spacing=6),
+                    ft.Column(content_rows, spacing=10),
                 ],
-                spacing=8,
+                spacing=12,
             ),
-            padding=12,
+            padding=18,
             bgcolor=COLORS["bg_surface"],
-            border_radius=8,
-            border=ft.Border.all(1, COLORS["border"]),
+            border_radius=RADIUS["lg"],
+            border=ft.Border.all(1, COLORS["border_subtle"]),
         )
 
     _PRIORIDADE_MAP = {
@@ -763,7 +793,7 @@ class SettingsView(ft.Container):
                                             content=ft.Text(role_label, size=10, color=COLORS["text_primary"]),
                                             bgcolor=COLORS["accent_primary"] if u.get("role") == "master" else COLORS["bg_elevated"],
                                             border_radius=4,
-                                            padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                                            padding=ft.Padding.symmetric(horizontal=6, vertical=2),
                                         ),
                                         ft.Container(
                                             content=ft.Text("Cambio pendiente", size=10, color=COLORS["accent_warning"]),
@@ -781,7 +811,7 @@ class SettingsView(ft.Container):
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         spacing=10,
                     ),
-                    padding=ft.padding.symmetric(horizontal=8, vertical=6),
+                    padding=ft.Padding.symmetric(horizontal=8, vertical=6),
                     bgcolor=COLORS["bg_elevated"] if not is_active else COLORS["bg_surface"],
                     border_radius=6,
                     border=ft.Border.all(1, COLORS["border"]),

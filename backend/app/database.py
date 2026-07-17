@@ -32,6 +32,7 @@ def _get_org_document_models() -> list:
     from app.models.client import Client
     from app.models.reading import Reading
     from app.models.invoice import Invoice, Counter
+    from app.models.product import Product
     from app.models.payment import Payment
     from app.models.settings import SystemSettings
     from app.models.finance import CashTransaction, Expense, Employee, Payroll
@@ -41,7 +42,7 @@ def _get_org_document_models() -> list:
         SifenEmission, SifenSessionLock, SifenCredential, SifenCoordinator,
     )
     return [
-        User, Client, Reading, Invoice, Counter, Payment,
+        User, Client, Reading, Invoice, Counter, Product, Payment,
         SystemSettings, CashTransaction, Expense, Employee,
         Payroll, SponsorDebt, SponsorInvoice, CutoffNotice,
         SifenEmission, SifenSessionLock, SifenCredential, SifenCoordinator,

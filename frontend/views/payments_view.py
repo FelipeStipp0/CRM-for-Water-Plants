@@ -17,6 +17,7 @@ from components.theme import (
     SPACING,
     create_button,
     create_header,
+    create_money_field,
     create_text_field,
     get_status_color,
 )
@@ -133,7 +134,7 @@ class PaymentsView(ft.Container):
             spacing=SPACING["sm"],
             expand=True,
         )
-        self.padding = ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["sm"])
+        self.padding = ft.Padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["md"])
         self.expand = True
 
     def _load_payments(self, skip: int = 0):
@@ -248,7 +249,7 @@ class PaymentsView(ft.Container):
             content=ft.Text(status or "-", size=FONTS["size_xs"], weight=ft.FontWeight.BOLD, color=color),
             bgcolor=ft.Colors.with_opacity(0.16, color),
             border=ft.Border.all(1, ft.Colors.with_opacity(0.5, color)),
-            padding=ft.padding.symmetric(horizontal=10, vertical=3),
+            padding=ft.Padding.symmetric(horizontal=10, vertical=3),
             border_radius=20,
         )
 
@@ -332,9 +333,15 @@ class PaymentsView(ft.Container):
             label=t("payments.field.method"), width=200, value="EFECTIVO",
             options=[ft.dropdown.Option("EFECTIVO"), ft.dropdown.Option("TRANSFERENCIA"), ft.dropdown.Option("CHEQUE")],
         )
-        amount_field = create_text_field(t("payments.field.amount"), width=220)
+        amount_field = create_money_field(t("payments.field.amount"), width=220)
         receiver_field = create_text_field(t("payments.field.receiver"), width=200)
-        obs_field = create_text_field(t("payments.field.observation"), width=430)
+        obs_field = create_text_field(
+            t("payments.field.observation"),
+            width=430,
+            multiline=True,
+            min_lines=2,
+            max_lines=3,
+        )
         error_text = ft.Text("", color=COLORS["accent_error"], visible=False)
 
         preview_total = ft.Text("Gs. 0", size=FONTS["size_lg"], weight=ft.FontWeight.BOLD, color=COLORS["text_primary"])
@@ -584,7 +591,7 @@ class PaymentsView(ft.Container):
                             ],
                             spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
-                        padding=ft.padding.symmetric(horizontal=10, vertical=8),
+                        padding=ft.Padding.symmetric(horizontal=10, vertical=8),
                         bgcolor=COLORS["bg_elevated"], border=ft.Border.all(1, COLORS["border"]),
                         border_radius=8, ink=True, on_click=choose_client,
                     )

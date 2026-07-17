@@ -281,7 +281,7 @@ class SponsorsView(ft.Container):
             expand=True,
         )
         self.bgcolor = COLORS["bg_primary"]
-        self.padding = ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["sm"])
+        self.padding = ft.Padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["md"])
         self.expand = True
 
     def _build_action_bar(self, controls: list[ft.Control]) -> ft.Control:
@@ -293,7 +293,7 @@ class SponsorsView(ft.Container):
                 run_spacing=SPACING["sm"],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=12, vertical=10),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
             bgcolor=COLORS["bg_elevated"],
             border=ft.Border.all(1, COLORS["border"]),
             border_radius=10,
@@ -302,7 +302,7 @@ class SponsorsView(ft.Container):
     def _build_metric_card(self, title: str, value_control: ft.Control, icon: str, icon_color: str) -> ft.Control:
         return ft.Container(
             width=165,
-            padding=ft.padding.symmetric(horizontal=12, vertical=10),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
             bgcolor=COLORS["bg_surface"],
             border=ft.Border.all(1, COLORS["border"]),
             border_radius=10,

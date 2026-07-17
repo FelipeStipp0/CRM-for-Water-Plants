@@ -6,5 +6,6 @@
     "language": "es",
     "org_slug": "juntacrm",
     "invoice_print_format": "p80",
-    "auth_token": null
+    "auth_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjb2RleC51aSIsIm9yZyI6Imp1bnRhY3JtIiwicm9sZSI6Im9wZXJhdG9yIiwiZXhwIjoxNzg0MzU4NTkzfQ.Pa4tjQ7gm-LHLPq0eOW0X-x6oNQoGXruopdOXa7kfJE",
+    "machine_id": "7cb3b51dafb34fd18c135c98a8a28c1b"
 }

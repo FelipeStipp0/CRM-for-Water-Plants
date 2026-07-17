@@ -6,7 +6,7 @@ import flet as ft
 
 from i18n import t
 from typing import Callable, Optional
-from components.theme import COLORS, FONTS, SPACING
+from components.theme import COLORS, FONTS, RADIUS
 
 
 class SearchBar(ft.Container):
@@ -28,18 +28,18 @@ class SearchBar(ft.Container):
             hint_text=placeholder,
             border=ft.InputBorder.NONE,
             bgcolor="transparent",
-            text_style=ft.TextStyle(color=COLORS["text_primary"], size=FONTS["size_sm"]),
+            text_style=ft.TextStyle(color=COLORS["text_primary"], size=FONTS["size_base"]),
             hint_style=ft.TextStyle(color=COLORS["text_muted"]),
             expand=True,
             on_change=self._handle_change,
             on_submit=self._handle_submit,
-            content_padding=ft.padding.symmetric(horizontal=8, vertical=6),
+            content_padding=ft.Padding.symmetric(horizontal=8, vertical=10),
         )
 
         self.content = ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(ft.Icons.SEARCH, color=COLORS["text_muted"], size=16),
+                    ft.Icon(ft.Icons.SEARCH, color=COLORS["text_muted"], size=18),
                     self.search_field,
                     ft.IconButton(
                         icon=ft.Icons.CLEAR,
@@ -47,16 +47,16 @@ class SearchBar(ft.Container):
                         icon_size=14,
                         on_click=self._clear,
                         tooltip=t("search.clear"),
-                        style=ft.ButtonStyle(padding=ft.padding.all(2)),
+                        style=ft.ButtonStyle(padding=ft.Padding.all(2)),
                     ),
                 ],
                 spacing=4,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            bgcolor=COLORS["bg_surface"],
+            bgcolor=COLORS["bg_input"],
             border=ft.Border.all(1, COLORS["border"]),
-            border_radius=6,
-            padding=ft.padding.symmetric(horizontal=8),
+            border_radius=RADIUS["md"],
+            padding=ft.Padding.symmetric(horizontal=12),
         )
         
         self.width = width

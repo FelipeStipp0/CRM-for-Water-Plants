@@ -2,12 +2,15 @@
 WMApp Frontend - Invoices View
 Tela de faturas com geracao em lote e criacao avulsa.
 """
+import threading
 from datetime import datetime
 
 import flet as ft
 
 from components.app_modal import AppModal, ModalAction
 from components.client_search_field import ClientSearchField
+from components.product_picker import ProductPickerRow
+from components.sifen_emit import open_sifen_emit_modal
 from components.data_table import DataTable
 from components.loading_overlay import LoadingOverlay
 from components.pagination import Pagination
@@ -16,6 +19,7 @@ from services.api_client import APIError
 from utils.errors import friendly_error
 from services.client_service import client_service
 from services.invoice_service import invoice_service
+from services.product_service import product_service
 from i18n import t
 from services.pdf_generation.invoices import (
     BulkInvoiceA4Generator,
@@ -91,11 +95,11 @@ class InvoicesView(ft.Container):
                     print(f"[InvoicesView] page_update_fallback_error err={page_err}")
 
     def _build(self):
-        self.date_from_field = create_text_field(t("invoices.filter.from"), value="", width=150, hint_text="YYYY-MM-DD")
-        self.date_to_field = create_text_field(t("invoices.filter.to"), value="", width=150, hint_text="YYYY-MM-DD")
+        self.date_from_field = create_text_field(t("invoices.filter.from"), value="", width=135, hint_text="YYYY-MM-DD")
+        self.date_to_field = create_text_field(t("invoices.filter.to"), value="", width=135, hint_text="YYYY-MM-DD")
         self.status_dd = ft.Dropdown(
             label=t("invoices.filter.status"),
-            width=150,
+            width=140,
             value="",
             options=[
                 ft.dropdown.Option("", t("invoices.filter.all")),
@@ -106,14 +110,26 @@ class InvoicesView(ft.Container):
             ],
         )
 
-        header = ft.Row(
+        header_actions = ft.Row(
             [
-                create_header(t("invoices.title")),
-                ft.Container(expand=True),
                 create_button(t("invoices.btn.print_bulk"), icon=ft.Icons.PRINT, on_click=lambda e: self._print_bulk_filtered(), primary=False),
                 create_button(t("invoices.btn.generate_bulk"), icon=ft.Icons.AUTO_AWESOME, on_click=self._open_generate_modal),
                 create_button(t("invoices.btn.custom"), icon=ft.Icons.ADD_CARD, on_click=self._open_custom_modal, primary=False),
-            ]
+                create_button("Factura electrónica", icon=ft.Icons.RECEIPT_LONG, on_click=self._open_sifen_modal, primary=False),
+            ],
+            alignment=ft.MainAxisAlignment.END,
+            spacing=SPACING["sm"],
+            run_spacing=SPACING["sm"],
+            wrap=True,
+        )
+        header = ft.ResponsiveRow(
+            [
+                ft.Container(content=create_header(t("invoices.title")), col={"sm": 12, "xl": 3}),
+                ft.Container(content=header_actions, alignment=ft.Alignment(1, 0), col={"sm": 12, "xl": 9}),
+            ],
+            columns=12,
+            spacing=SPACING["sm"],
+            run_spacing=SPACING["sm"],
         )
 
         filters = ft.Row(
@@ -168,7 +184,7 @@ class InvoicesView(ft.Container):
             spacing=SPACING["sm"],
             expand=True,
         )
-        self.padding = ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["sm"])
+        self.padding = ft.Padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["md"])
         self.expand = True
 
     def _clear_filters(self, e):
@@ -440,7 +456,7 @@ class InvoicesView(ft.Container):
                 [
                     ft.Container(
                         content=pages_col,
-                        padding=ft.padding.symmetric(vertical=SPACING["sm"]),
+                        padding=ft.Padding.symmetric(vertical=SPACING["sm"]),
                     )
                 ],
                 scroll=ft.ScrollMode.AUTO,
@@ -798,6 +814,9 @@ class InvoicesView(ft.Container):
         _modal_ref_gen.append(modal_gen)
         modal_gen.open()
 
+    def _open_sifen_modal(self, e):
+        open_sifen_emit_modal(self.page, self.show_snackbar)
+
     def _open_custom_modal(self, e):
         def _search_clients(query: str):
             try:
@@ -811,19 +830,47 @@ class InvoicesView(ft.Container):
         venc_field = create_text_field(t("invoices.custom.venc"), width=200, hint_text="YYYY-MM-DD (opcional)")
 
         items_column = ft.Column(spacing=8)
-        item_rows = []
+        picker_rows: list[ProductPickerRow] = []
+        cust_products: list[dict] = []
 
-        def add_item_row(ev=None, refresh=True):
-            desc = create_text_field(t("invoices.custom.item_desc"), width=230)
-            qtd = create_text_field(t("invoices.custom.item_qty"), value="1", width=70)
-            price = create_text_field(t("invoices.custom.item_price"), width=120)
-            row = ft.Row([desc, qtd, price], spacing=8)
-            item_rows.append({"desc": desc, "qtd": qtd, "price": price})
+        def _remove_cust_row(row):
+            if len(picker_rows) <= 1:
+                return
+            picker_rows.remove(row)
+            items_column.controls.remove(row)
+            self._safe_update(items_column)
+
+        def add_item_row(ev=None):
+            row = ProductPickerRow(cust_products, on_remove=_remove_cust_row)
+            picker_rows.append(row)
             items_column.controls.append(row)
-            if refresh:
-                self._safe_update(items_column)
+            self._safe_update(items_column)
 
-        add_item_row(refresh=False)
+        add_item_btn = create_button(t("invoices.custom.add_item"), icon=ft.Icons.ADD,
+                                     primary=False, disabled=True, on_click=add_item_row)
+
+        def _load_cust_products():
+            nonlocal cust_products
+            try:
+                cust_products = product_service.listar(activo=True) or []
+            except Exception:
+                cust_products = []
+            if not cust_products:
+                items_column.controls = [ft.Text(
+                    "No hay productos activos. Creá uno en «Productos» primero.",
+                    size=12, color=COLORS["accent_error"])]
+                add_item_btn.disabled = True
+            else:
+                items_column.controls = []
+                add_item_btn.disabled = False
+                add_item_row()
+            self._safe_update(items_column)
+            try:
+                add_item_btn.update()
+            except Exception:
+                pass
+
+        threading.Thread(target=_load_cust_products, daemon=True).start()
 
         error_text = ft.Text("", color=COLORS["accent_error"], visible=False)
 
@@ -833,19 +880,18 @@ class InvoicesView(ft.Container):
                     raise APIError(400, t("readings.err.select_client"))
 
                 items = []
-                for item in item_rows:
-                    desc = (item["desc"].value or "").strip()
-                    qtd_raw = (item["qtd"].value or "").strip()
-                    price_raw = (item["price"].value or "").strip().replace(",", ".")
-                    if not desc and not price_raw:
+                for r in picker_rows:
+                    try:
+                        v = r.get_values()
+                    except ValueError as ve:
+                        raise APIError(400, str(ve))
+                    if v is None:
                         continue
-                    if not desc:
-                        raise APIError(400, t("invoices.err.item_desc_required"))
                     items.append(
                         {
-                            "descripcion": desc,
-                            "cantidad": int(qtd_raw or "1"),
-                            "precio_unitario": float(price_raw),
+                            "descripcion": v["descripcion"],
+                            "cantidad": v["cantidad"],
+                            "precio_unitario": float(v["precio"]),
                         }
                     )
 
@@ -889,7 +935,7 @@ class InvoicesView(ft.Container):
                         [
                             ft.Text(t("invoices.detail.items"), weight=ft.FontWeight.BOLD),
                             ft.Container(expand=True),
-                            create_button(t("invoices.custom.add_item"), icon=ft.Icons.ADD, on_click=add_item_row, primary=False),
+                            add_item_btn,
                         ]
                     ),
                     items_column,

@@ -68,6 +68,9 @@ admin-api/.env
 # Claude/AI artifacts
 .claude/
 
+# Clone local do SDK/documentação Flet (repositório Git independente)
+/flet/
+
 # Dev utility scripts
 ast_scan*.py
 universal_validator.py
