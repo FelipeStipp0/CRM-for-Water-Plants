@@ -40,7 +40,12 @@ class Client(OrgDocument):
 
     # Dados pessoais
     nombre_completo: Indexed(str)
-    ci_ruc: Indexed(str, unique=True)
+    # Indexado para busca, mas NAO unico: numa junta o mesmo documento aparece em
+    # varias ligacoes — um dono com cinco casas, imoveis de aluguel, etc. Cada
+    # ligacao e um cliente com medidor e fatura proprios. Alem disso, quem nao tem
+    # documento valido entra com o RUC de cliente ocasional (44444401-7), que por
+    # definicao se repete. A identidade do cliente e a ligacao, nao a pessoa.
+    ci_ruc: Indexed(str)
     telefono: Optional[str] = None
     celular: Optional[str] = None
     email: Optional[str] = None  # p/ dEmailRec na fatura eletrônica (nem todo cliente tem)
