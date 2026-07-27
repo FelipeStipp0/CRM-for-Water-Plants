@@ -7,15 +7,17 @@ from datetime import datetime, date
 from decimal import Decimal
 from enum import Enum
 from typing import Optional, List
-from beanie import Document, Indexed, Link, PydanticObjectId
+from beanie import Indexed, Link, PydanticObjectId
 from pymongo import IndexModel, ASCENDING, ReturnDocument
 from pydantic import Field, BaseModel
 
 from app.models.client import Client
 from app.models.types import MongoDecimal
 
+from app.models.base import OrgDocument
 
-class Counter(Document):
+
+class Counter(OrgDocument):
     """Contadores sequenciais atomicos para numeracao."""
     name: str
     seq: int = 0
@@ -69,7 +71,7 @@ class InvoiceItem(BaseModel):
         return Decimal(self.cantidad) * self.precio_unitario
 
 
-class Invoice(Document):
+class Invoice(OrgDocument):
     """
     Fatura do cliente.
 

@@ -7,6 +7,7 @@ from typing import Annotated, List, Optional
 
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from pydantic import BaseModel, Field
 
 from app.models.client import Client
 from app.models.payment import Payment
@@ -80,6 +81,24 @@ async def create_payment(
     # Calcula divida antes do pagamento
     debt_before = await PaymentDistributionService.calculate_total_debt(client_id)
 
+    # Faturas direcionadas (opcional) e meses a adiantar (opcional)
+    invoice_ids = None
+    if payment_data.invoice_ids:
+        try:
+            invoice_ids = [PydanticObjectId(i) for i in payment_data.invoice_ids]
+        except Exception:
+            raise HTTPException(status_code=400, detail="invoice_ids invalido")
+    prepay_periods = (
+        [(p.mes, p.ano) for p in payment_data.prepay_periods]
+        if payment_data.prepay_periods else None
+    )
+
+    # Turno de caja aberto deste operador (None fora do Modo Caja): e o que
+    # amarra o pagamento ao cierre daquele turno. Chave e o USERNAME —
+    # `recibido_por` guarda o nome de exibicao.
+    from app.services.caja_service import sesion_activa_id
+    cash_session_id = await sesion_activa_id(current_user.username)
+
     # Processa pagamento
     result = await PaymentDistributionService.process_payment(
         client_id=client_id,
@@ -88,6 +107,9 @@ async def create_payment(
         aplicar_subsidio=payment_data.aplicar_subsidio,
         recibido_por=payment_data.recibido_por or current_user.full_name,
         observacion=payment_data.observacion,
+        invoice_ids=invoice_ids,
+        prepay_periods=prepay_periods,
+        cash_session_id=cash_session_id,
     )
 
     if not result.success:
@@ -148,6 +170,31 @@ async def create_payment(
         reactivation_qr_token=result.reactivation_qr_token,
         reactivation_comprobante=result.reactivation_comprobante,
     )
+
+
+class AnularPaymentRequest(BaseModel):
+    motivo: str = Field(..., min_length=3, description="Motivo de la anulación (queda en auditoría)")
+
+
+@router.post("/{payment_id}/anular")
+async def anular_payment_endpoint(
+    payment_id: PydanticObjectId,
+    body: AnularPaymentRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+):
+    """
+    Anula (estorna) un pago: restaura las facturas, revierte subsidios pendientes,
+    registra un estorno en caja y deja constancia en auditoría. No borra el pago.
+    """
+    from app.services.payment_reversal import (
+        anular_payment, PaymentNotFound, PaymentReversalError,
+    )
+    try:
+        return await anular_payment(payment_id, body.motivo, current_user.username)
+    except PaymentNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PaymentReversalError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/", response_model=List[PaymentHistory])

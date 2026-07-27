@@ -11,11 +11,13 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional, List
 
-from beanie import Document, Link, PydanticObjectId
+from beanie import Link, PydanticObjectId
 from pydantic import Field
 from pymongo import IndexModel, ASCENDING
 
 from app.models.client import Client
+
+from app.models.base import OrgDocument
 
 
 class EmissionStatus(str, Enum):
@@ -23,7 +25,26 @@ class EmissionStatus(str, Enum):
     PROCESSANDO = "PROCESSANDO"  # um coordenador pegou (com lock de job)
     EMITIDA = "EMITIDA"          # finalizado + XML validado (assinatura + QR)
     FALHOU = "FALHOU"            # erro (breaker/assinatura/negócio)
+    ABORTADA = "ABORTADA"        # o operador desistiu ANTES da firma (não chegou ao SET)
     CANCELADA = "CANCELADA"      # evento de cancelación aplicado
+
+
+class EmissionFase(str, Enum):
+    """
+    Fase corrente da emissão, reportada pelo coordenador enquanto trabalha.
+
+    Serve só para a tela de progresso do operador (que pode estar em OUTRO PC),
+    e é também o que define até onde dá para desistir: depois de `FIRMAR` o
+    documento existe no SET e só sai por evento de cancelación.
+    """
+
+    GENERAR = "GENERAR"        # login + resolver receptor + generar (ainda sem firma)
+    FIRMAR = "FIRMAR"          # assinando — ponto sem volta
+    RECUPERAR = "RECUPERAR"    # guardar + baixar XML assinado
+
+
+# Fases em que o job ainda não tocou o SET de forma irreversível.
+FASES_ABORTAVEIS = (None, EmissionFase.GENERAR)
 
 
 class ReceptorTipo(str, Enum):
@@ -32,7 +53,7 @@ class ReceptorTipo(str, Enum):
     INNOMINADO = "INNOMINADO"        # consumidor final
 
 
-class SifenEmission(Document):
+class SifenEmission(OrgDocument):
     """Uma ordem de emissão de documento eletrônico (fila do coordenador)."""
 
     # idempotência (o operador gera; reenvio não duplica)
@@ -77,6 +98,32 @@ class SifenEmission(Document):
     locked_by: Optional[str] = None
     locked_at: Optional[datetime] = None
 
+    # --- progresso ao vivo (tela do operador) ---
+    # O coordenador pode ser outro PC, então a fase corrente passa pelo backend.
+    fase: Optional[EmissionFase] = None
+    fase_at: Optional[datetime] = None
+
+    # --- desistência ANTES da firma (≠ cancelación fiscal) ---
+    # Enquanto o documento não foi assinado ele não existe para o SET: dá para
+    # simplesmente largar o job. Depois da firma, só o evento de cancelación.
+    abort_solicitado: bool = False
+    abort_por: Optional[str] = None
+    abort_solicitado_at: Optional[datetime] = None
+
+    # --- cancelación fiscal (evento à parte da emissão) ---
+    # Anular o pagamento no CRM não cancela o DTE no SET: o documento já foi
+    # aprovado e só sai por um evento de cancelación, que precisa da sessão do
+    # portal. Por isso a anulação apenas SOLICITA (marca aqui) e o coordenador
+    # executa, igual à emissão. `status` só vira CANCELADA quando o SET aceita.
+    cancel_solicitada: bool = False
+    cancel_motivo: Optional[str] = None
+    cancel_solicitada_por: Optional[str] = None
+    cancel_solicitada_at: Optional[datetime] = None
+    cancelada_at: Optional[datetime] = None
+    cancel_error: Optional[str] = None
+    cancel_locked_by: Optional[str] = None      # device processando a cancelación
+    cancel_locked_at: Optional[datetime] = None
+
     class Settings:
         name = "sifen_emissions"
         use_state_management = True
@@ -84,10 +131,12 @@ class SifenEmission(Document):
             [("client_request_id", 1)],  # idempotência
             [("status", 1), ("created_at", 1)],
             [("cdc", 1)],
+            [("cancel_solicitada", 1), ("cancelada_at", 1)],  # fila de cancelación
+            [("payment_id", 1)],  # achar o DTE do pagamento no estorno
         ]
 
 
-class SifenSessionLock(Document):
+class SifenSessionLock(OrgDocument):
     """Lock SINGLETON da sessão do portal da org (uma sessão ativa por RUC)."""
 
     key: str = "session"
@@ -102,7 +151,7 @@ class SifenSessionLock(Document):
         ]
 
 
-class SifenCoordinator(Document):
+class SifenCoordinator(OrgDocument):
     """
     PC liberado para emitir documentos eletrônicos ("Liberar este PC").
     O backend serve jobs da fila só a coordenadores enabled + online (heartbeat fresco),
@@ -123,7 +172,7 @@ class SifenCoordinator(Document):
         ]
 
 
-class SifenCredential(Document):
+class SifenCredential(OrgDocument):
     """Credenciais cifradas do portal da org (clave + PIN de assinatura)."""
 
     key: str = "default"

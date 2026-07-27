@@ -4,13 +4,15 @@ Modelo de Leitura de consumo do medidor.
 
 from datetime import datetime
 from typing import Optional
-from beanie import Document, Indexed, Link
+from beanie import Indexed, Link
 from pydantic import Field
 
 from app.models.client import Client
 
+from app.models.base import OrgDocument
 
-class Reading(Document):
+
+class Reading(OrgDocument):
     """
     Leitura do medidor de um cliente.
     Cada leitura representa o valor do medidor em uma data especifica.

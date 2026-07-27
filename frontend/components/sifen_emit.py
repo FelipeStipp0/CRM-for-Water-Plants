@@ -13,13 +13,15 @@ A emissão em si roda no coordenador local (sessão única); aqui enfileira e ac
 """
 
 import threading
-import time
 import uuid
 
 import flet as ft
 
+from i18n import t
+
 from components.app_modal import AppModal, ModalAction
 from components.product_picker import ProductPickerRow
+from components.sifen_progress import open_sifen_progress
 from components.theme import COLORS, create_button, create_text_field
 from utils.errors import friendly_error
 from services.api_client import APIError
@@ -59,7 +61,7 @@ def open_sifen_emit_modal(page: ft.Page, show_snackbar, *,
     total_text = ft.Text("Total: Gs 0", size=13, weight=ft.FontWeight.BOLD, color=COLORS["text_primary"])
     status_text = ft.Text("", size=13)
     progress = ft.ProgressRing(width=16, height=16, visible=False)
-    add_btn = create_button("Agregar ítem", icon=ft.Icons.ADD, primary=False, disabled=True,
+    add_btn = create_button(t("invoices.custom.add_item"), icon=ft.Icons.ADD, primary=False, disabled=True,
                             on_click=lambda e: _add_row())
 
     _modal_ref: list[AppModal] = []
@@ -204,45 +206,32 @@ def open_sifen_emit_modal(page: ft.Page, show_snackbar, *,
         threading.Thread(target=_emitir_worker, args=(doc, items, tipo_id, nombre), daemon=True).start()
 
     def _emitir_worker(doc, items, tipo_id, nombre):
+        """Enfileira e entrega o acompanhamento à tela de progresso."""
         try:
             job = sifen_service.emitir(client_request_id=uuid.uuid4().hex, doc=doc,
                                        items=items, tipo_id=tipo_id, nombre=nombre)
-            emission_id = job["id"]
-            st = job
-            for _ in range(80):
-                if st.get("status") in ("EMITIDA", "FALHOU", "CANCELADA"):
-                    break
-                time.sleep(1.5)
-                st = sifen_service.get_emision(emission_id)
-            status = st.get("status")
-            if status == "EMITIDA":
-                _set_status(f"✓ Factura Nº {st.get('numero_documento')} "
-                            f"(CDC …{(st.get('cdc') or '')[-6:]})", COLORS["accent_success"])
-                show_snackbar("Factura electrónica emitida.")
-                if on_done:
-                    try:
-                        on_done(st)
-                    except Exception:
-                        pass
-            elif status == "FALHOU":
-                _set_status(f"✗ Falló: {st.get('error')}", COLORS["accent_error"])
-            else:
-                _set_status(f"… {status} (aún procesando). Podés cerrar; sigue en la cola.",
-                            COLORS["text_secondary"])
         except APIError as ex:
             _set_status(friendly_error(ex), COLORS["accent_error"])
+            return
         except Exception as ex:  # noqa: BLE001
             _set_status(str(ex), COLORS["accent_error"])
+            return
         finally:
             progress.visible = False
             _safe_update(progress)
+
+        # Este modal já cumpriu seu papel (montar o documento); quem acompanha a
+        # emissão é a tela de progresso, igual à da caja.
+        modal.close()
+        open_sifen_progress(page, show_snackbar, emission_id=job["id"],
+                            receptor=f"{nombre or '-'} · {doc}", on_done=on_done)
 
     modal = AppModal(
         page=page,
         title="Emitir factura electrónica",
         content=ft.Column([
             ft.Row([doc_field,
-                    create_button("Consultar", icon=ft.Icons.SEARCH, primary=False, on_click=_consultar),
+                    create_button(t("common.consult"), icon=ft.Icons.SEARCH, primary=False, on_click=_consultar),
                     consultar_progress, natureza_badge],
                    spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ft.Row([nombre_field, tipo_id_dd], spacing=10),
@@ -255,8 +244,8 @@ def open_sifen_emit_modal(page: ft.Page, show_snackbar, *,
                    vertical_alignment=ft.CrossAxisAlignment.CENTER),
         ], spacing=12, tight=True, scroll=ft.ScrollMode.AUTO),
         actions=[
-            ModalAction("Cerrar", on_click=lambda ev: modal.close()),
-            ModalAction("Emitir", on_click=_emitir, primary=True),
+            ModalAction(t("common.close"), on_click=lambda ev: modal.close()),
+            ModalAction(t("sifen.emit"), on_click=_emitir, primary=True),
         ],
         width_pct=0.5,
     )

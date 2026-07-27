@@ -10,14 +10,29 @@ from pydantic import BaseModel, Field
 from app.models.payment import PaymentMethod
 
 
+class PrepayPeriod(BaseModel):
+    """Mes futuro a adiantar (gera fatura minima ja paga na mesma transacao)."""
+    mes: int = Field(ge=1, le=12)
+    ano: int = Field(ge=2000, le=2100)
+
+
 class PaymentCreate(BaseModel):
     """
     Schema para criacao de pagamento.
-    O valor sera distribuido automaticamente entre as faturas pendentes.
+
+    Distribuicao:
+    - Sem invoice_ids nem prepay_periods: distribui automatico nas pendentes
+      (mais antiga -> mais recente) — comportamento historico.
+    - Com invoice_ids: paga SOMENTE as faturas marcadas (pagamento direcionado).
+    - Com prepay_periods: adianta meses futuros ao valor minimo (tarifa_base);
+      cada mes vira fatura minima gerada e quitada nesta transacao. A geracao
+      mensal deixa de emitir para esses meses (idempotencia) ate expirarem.
 
     IMPORTANTE para Frontend:
     - aplicar_subsidio: checkbox na UI. Se True e cliente tem sponsor,
       cria SponsorDebt. Se False, ignora o sponsor mesmo que exista.
+    - valor_total deve bater com a soma do selecionado (pendentes marcadas +
+      meses adiantados). O troco é dinheiro físico, calculado na UI, não entra aqui.
     """
     client_id: str
     valor_total: Decimal = Field(gt=0)
@@ -25,6 +40,8 @@ class PaymentCreate(BaseModel):
     aplicar_subsidio: bool = True  # False = ignora sponsor neste pagamento
     recibido_por: Optional[str] = None
     observacion: Optional[str] = None
+    invoice_ids: Optional[List[str]] = None
+    prepay_periods: Optional[List[PrepayPeriod]] = None
 
 
 class AllocationDetail(BaseModel):

@@ -30,6 +30,13 @@ from app.services.invoice_generation import InvoiceGenerationService
 
 router = APIRouter(dependencies=[Depends(require_scopes("invoices"))])
 
+# Leitura de fatura para IMPRESSÃO: quem cobra precisa emitir o ticket de cada
+# mês que acabou de pagar, e o cajero não tem (nem deve ter) o módulo de faturas.
+# Router à parte porque dependência de router não dá para afrouxar por rota.
+print_router = APIRouter(
+    dependencies=[Depends(require_scopes("invoices", "payments", "caja"))]
+)
+
 
 def _to_decimal(value) -> Decimal:
     """Converte Decimal128 do MongoDB para Decimal do Python."""
@@ -382,7 +389,7 @@ async def get_invoice(
     return invoice_to_response(invoice, client_nombre)
 
 
-@router.get("/{invoice_id}/with-balance", response_model=InvoiceWithPendingBalance)
+@print_router.get("/{invoice_id}/with-balance", response_model=InvoiceWithPendingBalance)
 async def get_invoice_with_balance(
     invoice_id: str,
     current_user: Annotated[User, Depends(get_current_active_user)],

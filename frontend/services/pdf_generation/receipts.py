@@ -33,7 +33,7 @@ class PaymentReceiptP80Generator(PDFGenerator):
         # Altura generosa: garante que sello + firma + disclaimer caibam sem
         # sobreposição (papel térmico é contínuo, espaço extra ao final é ok).
         extra_subsidio = 3 if (subsidio_aplicado and total_subsidio > 0) else 0
-        dynamic_h = max(175, 150 + len(affected) * 6 + extra_subsidio * 8)
+        dynamic_h = max(182, 157 + len(affected) * 6 + extra_subsidio * 8)
         page_size = (80 * mm, dynamic_h * mm)
 
         c = self.create_canvas(page_size=page_size)
@@ -50,7 +50,8 @@ class PaymentReceiptP80Generator(PDFGenerator):
 
         # --- Header empresa ---
         y = draw_company_header_p80(c, width=width, margin=M, y=y,
-                                    title="Recibo de Pago", company=company)
+                                    title="Recibo de Pago", company=company,
+                                    meta_color=PdfColors.DARK)
 
         # --- Número do recibo + data ---
         _nro = payment.get("numero_recibo")
@@ -58,13 +59,13 @@ class PaymentReceiptP80Generator(PDFGenerator):
         c.setFont(*PdfStyles.P80_FONT_BODY)
         c.setFillColor(PdfColors.DARK)
         c.drawString(M, y, "Recibo:")
-        c.setFillColor(PdfColors.GRAY)
+        c.setFillColor(PdfColors.DARK)
         c.drawRightString(width - M, y, recibo_txt)
         y -= G
 
         c.setFillColor(PdfColors.DARK)
         c.drawString(M, y, "Fecha:")
-        c.setFillColor(PdfColors.GRAY)
+        c.setFillColor(PdfColors.DARK)
         c.drawRightString(width - M, y, format_date(payment.get("fecha_pago"), include_time=True))
         y -= G
 
@@ -80,7 +81,7 @@ class PaymentReceiptP80Generator(PDFGenerator):
         c.setFont(*PdfStyles.P80_FONT_BODY)
         c.setFillColor(PdfColors.DARK)
         c.drawString(M, y, "Nombre:")
-        c.setFillColor(PdfColors.GRAY)
+        c.setFillColor(PdfColors.DARK)
         nombre = str(payment_result.get("client_name", "-"))
         words = nombre.split()
         line1, line2 = [], []
@@ -97,13 +98,13 @@ class PaymentReceiptP80Generator(PDFGenerator):
 
         c.setFillColor(PdfColors.DARK)
         c.drawString(M, y, "CI/RUC:")
-        c.setFillColor(PdfColors.GRAY)
+        c.setFillColor(PdfColors.DARK)
         c.drawRightString(width - M, y, payment_result.get("client_ci_ruc", "-"))
         y -= G
 
         c.setFillColor(PdfColors.DARK)
         c.drawString(M, y, "Método:")
-        c.setFillColor(PdfColors.GRAY)
+        c.setFillColor(PdfColors.DARK)
         c.drawRightString(width - M, y, payment.get("metodo", "-"))
         y -= G
 
@@ -121,7 +122,7 @@ class PaymentReceiptP80Generator(PDFGenerator):
 
         c.setFont(*PdfStyles.P80_FONT_BODY)
         if not affected:
-            c.setFillColor(PdfColors.LIGHT_GRAY)
+            c.setFillColor(PdfColors.DARK)
             c.drawString(M, y, "Ninguna")
             y -= G
         else:
@@ -129,7 +130,7 @@ class PaymentReceiptP80Generator(PDFGenerator):
                 label = short_period(alloc.get("mes_referencia"), alloc.get("ano_referencia"))
                 c.setFillColor(PdfColors.DARK)
                 c.drawString(M, y, label)
-                c.setFillColor(PdfColors.GRAY)
+                c.setFillColor(PdfColors.DARK)
                 c.drawRightString(width - M, y, format_gs(alloc.get("valor_aplicado", 0)))
                 y -= G
 
@@ -141,13 +142,13 @@ class PaymentReceiptP80Generator(PDFGenerator):
         if subsidio_aplicado and total_subsidio > 0:
             c.setFillColor(PdfColors.DARK)
             c.drawString(M, y, "Valor original:")
-            c.setFillColor(PdfColors.GRAY)
+            c.setFillColor(PdfColors.DARK)
             c.drawRightString(width - M, y, format_gs(valor_orig))
             y -= G
 
             c.setFillColor(PdfColors.DARK)
             c.drawString(M, y, "Subsidio aplicado:")
-            c.setFillColor(PdfColors.GRAY)
+            c.setFillColor(PdfColors.DARK)
             c.drawRightString(width - M, y, f"- {format_gs(total_subsidio)}")
             y -= G * 0.5
             draw_h_rule(c, M, y, iw, thickness=0.4)
@@ -166,7 +167,7 @@ class PaymentReceiptP80Generator(PDFGenerator):
         if subsidio_aplicado and total_subsidio > 0:
             sponsor = payment_result.get("sponsor_name", "-")
             c.setFont(*PdfStyles.P80_FONT_SMALL)
-            c.setFillColor(PdfColors.LIGHT_GRAY)
+            c.setFillColor(PdfColors.DARK)
             sponsor_str = str(sponsor)
             c.drawString(M, y, "Subsidiado por:")
             y -= G * 0.75
@@ -179,18 +180,28 @@ class PaymentReceiptP80Generator(PDFGenerator):
 
         sello_h = 18 * mm
         sello_y = y - sello_h
-        c.setStrokeColor(PdfColors.RULE)
+        c.setStrokeColor(PdfColors.DARK)
         c.setLineWidth(0.6)
         c.rect(M, sello_y, iw, sello_h, stroke=1, fill=0)
         c.setLineWidth(1)
         c.setFont(*PdfStyles.P80_FONT_SMALL)
-        c.setFillColor(PdfColors.LIGHT_GRAY)
+        c.setFillColor(PdfColors.DARK)
         c.drawCentredString(cx, sello_y + sello_h - 5 * mm, "Sello y firma")
 
+        # Aviso: este recibo é o ÚNICO comprovante impresso do cobro — não sai
+        # uma via de fatura por mês pago. Precisa estar explícito para o cliente.
+        y = sello_y - G * 1.2
+        c.setFont(*PdfStyles.P80_FONT_SMALL)
+        c.setFillColor(PdfColors.DARK)
+        for line in ("Este recibo comprueba el pago de las",
+                     "facturas listadas arriba."):
+            c.drawCentredString(cx, y, line)
+            y -= G * 0.7
+
         # Disclaimer SEMPRE abaixo da caixa de sello, com folga (sem sobreposição).
-        y = sello_y - G * 1.4
+        y -= G * 0.4
         c.setFont("Helvetica", 6)
-        c.setFillColor(PdfColors.LIGHT_GRAY)
+        c.setFillColor(PdfColors.DARK)
         c.drawCentredString(cx, y, "TICKET - NO VÁLIDO COMO FACTURA LEGAL O CRÉDITO FISCAL")
 
         return self.finalize(c)

@@ -86,6 +86,8 @@ class SettingsView(ft.Container):
         # Registra FilePicker nos serviços da página (Flet 0.84) na primeira vez.
         if self.page and self._logo_picker not in self.page.services:
             self.page.services.append(self._logo_picker)
+        if self.page and getattr(self, "_logo_cuad_picker", None) and self._logo_cuad_picker not in self.page.services:
+            self.page.services.append(self._logo_cuad_picker)
         # Operational rule: refresh whenever user opens/returns to this view.
         if self.page:
             try:
@@ -180,6 +182,20 @@ class SettingsView(ft.Container):
             self._logo_preview.visible = False
             self._logo_status.value = t("settings.logo.none")
             self._logo_status.color = COLORS["text_muted"]
+
+        # Logo cuadrada
+        b64c = self.settings.get("logo_cuadrado_base64") or ""
+        mimec = self.settings.get("logo_cuadrado_mime") or "image/png"
+        if b64c:
+            self._logo_cuad_preview.src = f"data:{mimec};base64,{b64c}"
+            self._logo_cuad_preview.visible = True
+            self._logo_cuad_status.value = "Logo cuadrada configurada"
+            self._logo_cuad_status.color = COLORS["accent_success"]
+        else:
+            self._logo_cuad_preview.src = ""
+            self._logo_cuad_preview.visible = False
+            self._logo_cuad_status.value = "Sin logo cuadrada"
+            self._logo_cuad_status.color = COLORS["text_muted"]
 
         self._safe_update(self)
 
@@ -299,6 +315,79 @@ class SettingsView(ft.Container):
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
+        # --- Logo cuadrada (1×1) para el KuDE ---
+        self._logo_cuad_picker = ft.FilePicker()
+        self._logo_cuad_preview = ft.Image(src="", width=64, height=64, fit=ft.BoxFit.CONTAIN, visible=False)
+        self._logo_cuad_status = ft.Text("Sin logo cuadrada", size=FONTS["size_sm"], color=COLORS["text_muted"])
+
+        async def _pick_logo_cuad(e):
+            files = await self._logo_cuad_picker.pick_files(
+                allowed_extensions=["png", "jpg", "jpeg", "webp"],
+                dialog_title="Logo cuadrada (1×1)")
+            if not files:
+                return
+            self._logo_cuad_status.value = "Enviando…"
+            self._logo_cuad_status.color = COLORS["text_muted"]
+            self._safe_update(self._logo_cuad_status)
+            try:
+                result = settings_service.upload_logo_cuadrado(files[0].path)
+                b64 = result.get("logo_cuadrado_base64") or ""
+                mime = result.get("logo_cuadrado_mime") or "image/png"
+                self._logo_cuad_preview.src = f"data:{mime};base64,{b64}"
+                self._logo_cuad_preview.visible = True
+                self._logo_cuad_status.value = "Logo cuadrada actualizada"
+                self._logo_cuad_status.color = COLORS["accent_success"]
+                self.settings = result
+            except APIError as err:
+                self._logo_cuad_status.value = t("common.error", detail=err.detail)
+                self._logo_cuad_status.color = COLORS["accent_error"]
+            except Exception as err:
+                self._logo_cuad_status.value = t("common.error_unexpected", err=err)
+                self._logo_cuad_status.color = COLORS["accent_error"]
+            self._safe_update(self._logo_cuad_preview)
+            self._safe_update(self._logo_cuad_status)
+
+        def _remove_logo_cuad(e):
+            try:
+                result = settings_service.delete_logo_cuadrado()
+                self._logo_cuad_preview.src = ""
+                self._logo_cuad_preview.visible = False
+                self._logo_cuad_status.value = "Logo cuadrada eliminada"
+                self._logo_cuad_status.color = COLORS["text_muted"]
+                self.settings = result
+            except APIError as err:
+                self._logo_cuad_status.value = t("common.error", detail=err.detail)
+                self._logo_cuad_status.color = COLORS["accent_error"]
+            except Exception as err:
+                self._logo_cuad_status.value = t("common.error_unexpected", err=err)
+                self._logo_cuad_status.color = COLORS["accent_error"]
+            self._safe_update(self._logo_cuad_preview)
+            self._safe_update(self._logo_cuad_status)
+
+        logo_cuad_section_content = ft.Row(
+            [
+                self._logo_cuad_preview,
+                ft.Column(
+                    [
+                        ft.Text("Logo cuadrada (1×1) — usada en el KuDE / factura legal",
+                                size=FONTS["size_sm"], color=COLORS["text_secondary"]),
+                        self._logo_cuad_status,
+                        ft.Row(
+                            [
+                                create_button("Seleccionar", icon=ft.Icons.UPLOAD_FILE,
+                                              on_click=_pick_logo_cuad, primary=False),
+                                create_button(t("common.remove"), icon=ft.Icons.DELETE_OUTLINE,
+                                              on_click=_remove_logo_cuad, primary=False),
+                            ],
+                            spacing=8,
+                        ),
+                    ],
+                    spacing=6,
+                ),
+            ],
+            spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
         junta_section = self._section(
             t("settings.junta.section"),
             ft.Icons.BUSINESS,
@@ -308,6 +397,8 @@ class SettingsView(ft.Container):
                 ft.Row([self.junta_fields["actividad"]], spacing=8),
                 ft.Divider(height=1, color=COLORS["border"]),
                 logo_section_content,
+                ft.Divider(height=1, color=COLORS["border_subtle"]),
+                logo_cuad_section_content,
             ],
         )
 
@@ -967,8 +1058,8 @@ class SettingsView(ft.Container):
                 tight=True,
             ),
             actions=[
-                ModalAction("Cancelar", on_click=lambda ev: modal.close()),
-                ModalAction("Invitar", on_click=save_user, primary=True),
+                ModalAction(t("common.cancel"), on_click=lambda ev: modal.close()),
+                ModalAction(t("settings.users.invite"), on_click=save_user, primary=True),
             ],
             width_pct=0.6,
         )

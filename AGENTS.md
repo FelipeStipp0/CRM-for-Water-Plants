@@ -7,6 +7,11 @@ subsídios, mapa catastral e WhatsApp. SaaS **multi-tenant** (uma org por junta)
 > **Idioma da UI: espanhol.** Toda mensagem/rótulo voltado ao usuário final é em espanhol
 > (es). O código e comentários são majoritariamente em pt-BR. Há uma camada de i18n es/pt.
 
+> **📌 Para IA/agentes:** comece por **[docs/AI_CONTEXT.md](docs/AI_CONTEXT.md)** (onde mexer,
+> o que ler antes, pegadinhas + mapa de referência do Flet) e
+> **[docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md)** (arquitetura
+> de ponta a ponta). Este CLAUDE.md é o resumo curto.
+
 ---
 
 ## Componentes (monorepo)
@@ -14,7 +19,7 @@ subsídios, mapa catastral e WhatsApp. SaaS **multi-tenant** (uma org por junta)
 | Pasta | Stack | Papel |
 |---|---|---|
 | `backend/` | **FastAPI + Beanie (ODM) + MongoDB** (async) | API "cérebro": dados puros (JSON), regras de negócio, multi-tenant. Não gera PDFs. |
-| `frontend/` | **Flet 0.84** (desktop Windows, Python) | App do operador. Renderiza UI, gera/imprime PDFs localmente. |
+| `frontend/` | **Flet 0.86** (desktop Windows, Python 3.14) | App do operador. Renderiza UI, gera/imprime PDFs localmente. |
 | `admin-api/` | Node.js / TypeScript | API do superadmin: cria orgs, gera connection strings criptografadas (AES-256) em `wmapp_admin`. |
 | `admin-panel/` | Next.js | Painel web do superadmin. |
 | `app_android/` | Flutter | App mobile (entregadores/técnicos — confirmação por QR, foto, GPS). |
@@ -75,8 +80,9 @@ backend/app/
 ```
 
 ### Routers (`app.include_router` em `main.py`)
-`/auth` · `/clients` · `/readings` · `/invoices` · `/payments` · `/settings` · `/finance`
-· `/sponsors` · `/cutoff` (+ `/cutoff/qr/*` público) · `/upload` · `/map` · `/whatsapp`
+`/auth` · `/clients` · `/readings` · `/invoices` · `/payments` · `/products` · `/settings`
+· `/finance` · `/sponsors` · `/cutoff` (+ `/cutoff/qr/*` público) · `/upload` · `/map`
+· `/sifen` · `/whatsapp`
 
 ### Models principais
 - `Organization` (em `wmapp_admin`) — slug, connectionString criptografada.
@@ -117,11 +123,16 @@ backend/app/
 
 ---
 
-## Frontend — convenções (Flet 0.84)
+## Frontend — convenções (Flet 0.86)
 
-- Entrypoint `ft.run(main)`. **Atenção**: o 0.84 tem muitas mudanças de API —
-  ver **[docs/FLET_API_GOTCHAS.md](docs/FLET_API_GOTCHAS.md)** (FilePicker em `page.services` +
-  `pick_files` async, `ft.Alignment.CENTER`, sem `max_height`, teclado em `AppModal`).
+- Entrypoint `ft.run(main)` (não mais `ft.app`).
+- 🚨 **Não mexer no Flet sem antes verificar a documentação oficial.** A **fonte de verdade** é o
+  snapshot local da doc oficial em **`flet/website/docs/`** (controls, cookbook, services, types).
+  Mapa "precisa de X → doc local Y" em **[docs/AI_CONTEXT.md §3](docs/AI_CONTEXT.md)**. Em dúvida
+  de assinatura, `python -c "import flet as ft, inspect; print(inspect.signature(...))"`.
+- **[docs/FLET_API_GOTCHAS.md](docs/FLET_API_GOTCHAS.md)** guarda **apenas o que é específico
+  deste app** e não está na doc oficial (exe branded no Windows, `AppModal` como camada de compat).
+  Divergência de API pura é da doc oficial — não é gotcha.
 - **i18n**: `from i18n import t` (`frontend/i18n.py`); catálogos es/pt; idioma vem de
   `user.language` (default es). Strings novas voltadas ao usuário → catálogo + `t()`.
 - **Views** em `frontend/views/` (uma por módulo do sidebar). **Componentes** reutilizáveis em
@@ -134,8 +145,10 @@ backend/app/
 
 ## Índice da documentação (`docs/`)
 
-- **[CHANGES_2026-06.md](docs/CHANGES_2026-06.md)** — mudanças recentes (Flet 0.84, recibo, reativação auto, i18n, mapa).
-- [FLET_API_GOTCHAS.md](docs/FLET_API_GOTCHAS.md) — incompatibilidades do Flet 0.84.
+- **[AI_CONTEXT.md](docs/AI_CONTEXT.md)** — guia de navegação p/ IA (onde mexer, mapa de referência do Flet).
+- **[architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md)** — arquitetura de ponta a ponta.
+- **[CHANGES_2026-06.md](docs/CHANGES_2026-06.md)** — mudanças recentes (Flet, recibo, reativação auto, i18n, mapa).
+- **Flet: doc oficial** em `flet/website/docs/` (fonte de verdade da API). [FLET_API_GOTCHAS.md](docs/FLET_API_GOTCHAS.md) — só o específico deste app (exe branded, `AppModal`).
 - [functional_documentation.md](docs/functional_documentation.md) — funcionalidades por módulo.
 - [workflow_documentation.md](docs/workflow_documentation.md) — lógica de faturamento/corte/recursividade.
 - [FRONTEND_INTEGRATION.md](docs/FRONTEND_INTEGRATION.md) — endpoints e integração do frontend.
@@ -162,4 +175,4 @@ backend/app/
 - **Testes do backend**: a fixture de auth pode retornar `401` em ambiente sem o setup multi-tenant
   completo — não é regressão das regras de negócio.
 - **datetime.utcnow()** está deprecado (hints do linter) mas é o padrão atual no código.
-- **SEMPRE TESTAR SE UM NOME DE FUNÇÃO EXISTE NO FLET!** O flet tem muitas coisas diferentes do que estamos acostumados, então muita coisa não é o que voce acha que é, sempre rode e veja se existe antes de aplicar.
+- **NÃO MEXER NO FLET SEM ANTES VERIFICAR A DOCUMENTAÇÃO OFICIAL!** O flet tem muita coisa diferente do que estamos acostumados — muito não é o que você acha que é. Consulte **sempre** o snapshot da doc oficial em `flet/website/docs/` (mapa em [docs/AI_CONTEXT.md §3](docs/AI_CONTEXT.md)) antes de escrever qualquer código Flet; em dúvida de assinatura, `python -c "import flet as ft, inspect; print(inspect.signature(...))"`.

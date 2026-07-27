@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rDE xmlns="http://ekuatia.set.gov.py/sifen/xsd">
+  <DE Id="01800123456001001000123412026070111234567895">
+    <gTimb><dDesTiDE>Factura electronica</dDesTiDE><dNumTim>80012345</dNumTim>
+      <dEst>001</dEst><dPunExp>001</dPunExp><dNumDoc>0001234</dNumDoc><dFeIniT>2025-01-01</dFeIniT></gTimb>
+    <gDatGralOpe><dFeEmiDE>2026-07-01T09:15:00</dFeEmiDE>
+      <gEmis><dRucEm>80012345</dRucEm><dDVEmi>6</dDVEmi>
+        <dNomEmi>JUNTA DE SANEAMIENTO SANTA ROSA</dNomEmi>
+        <dDirEmi>Avda. Mariscal Lopez 1234, Santa Rosa</dDirEmi>
+        <dTelEmi>0971555123</dTelEmi><dEmailE>facturacion@juntasantarosa.com.py</dEmailE>
+        <gActEco><dDesActEco>Provision de agua potable</dDesActEco></gActEco>
+        <dDesDepEmi>Central</dDesDepEmi><dDesCiuEmi>Santa Rosa</dDesCiuEmi></gEmis>
+      <gDatRec><dNomRec>Maria Fernandez de Gonzalez</dNomRec>
+        <dRucRec>3456789</dRucRec><dDVRec>4</dDVRec>
+        <dDirRec>Manzana 5, Lote 12, Barrio San Jose</dDirRec><dTelRec>0983111222</dTelRec>
+        <dDesDepRec>Central</dDesDepRec><dDesCiuRec>Santa Rosa</dDesCiuRec></gDatRec>
+      <gOpeCom><dDesMoneOpe>Guarani</dDesMoneOpe></gOpeCom></gDatGralOpe>
+    <gDtipDE><gCamCond><dDCondOpe>Contado</dDCondOpe></gCamCond>
+      <gCamItem><dCodInt>1</dCodInt><dDesProSer>Servicio de agua Mayo/2026</dDesProSer><dCantProSer>1</dCantProSer>
+        <gValorItem><dPUniProSer>30000</dPUniProSer><gValorRestaItem><dTotOpeItem>30000</dTotOpeItem></gValorRestaItem></gValorItem>
+        <gCamIVA><dTasaIVA>10</dTasaIVA><iAfecIVA>1</iAfecIVA><dLiqIVAItem>2727</dLiqIVAItem></gCamIVA></gCamItem>
+      <gCamItem><dCodInt>1</dCodInt><dDesProSer>Servicio de agua Junio/2026</dDesProSer><dCantProSer>1</dCantProSer>
+        <gValorItem><dPUniProSer>30000</dPUniProSer><gValorRestaItem><dTotOpeItem>30000</dTotOpeItem></gValorRestaItem></gValorItem>
+        <gCamIVA><dTasaIVA>10</dTasaIVA><iAfecIVA>1</iAfecIVA><dLiqIVAItem>2727</dLiqIVAItem></gCamIVA></gCamItem>
+      <gCamItem><dCodInt>1</dCodInt><dDesProSer>Servicio de agua Julio/2026 con excedente</dDesProSer><dCantProSer>1</dCantProSer>
+        <gValorItem><dPUniProSer>45000</dPUniProSer><gValorRestaItem><dTotOpeItem>45000</dTotOpeItem></gValorRestaItem></gValorItem>
+        <gCamIVA><dTasaIVA>10</dTasaIVA><iAfecIVA>1</iAfecIVA><dLiqIVAItem>4091</dLiqIVAItem></gCamIVA></gCamItem></gDtipDE>
+    <gTotSub><dSub10>105000</dSub10><dTotGralOpe>105000</dTotGralOpe>
+      <dBaseGrav10>95455</dBaseGrav10><dIVA10>9545</dIVA10><dTotIVA>9545</dTotIVA></gTotSub></DE>
+  <gCamFuFD><dCarQR>https://ekuatia.set.gov.py/consultas/qr?nVersion=150&amp;Id=01800123456001001000123412026070111234567895&amp;dTotGralOpe=105000&amp;dTotIVA=9545&amp;cItems=3&amp;IdCSC=0001&amp;cHashQR=deadbeef</dCarQR></gCamFuFD>
+</rDE>

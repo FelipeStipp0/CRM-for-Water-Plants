@@ -715,7 +715,7 @@ class MapView(ft.Column):
                 self._assign_btn,
                 ft.Text("Gerar numeração de lotes:", size=FONTS["size_xs"], color=COLORS["text_secondary"]),
                 self._gen_mz_field,
-                create_button("Gerar lotes", icon=ft.Icons.AUTO_FIX_HIGH, on_click=self._generate_codes, primary=False),
+                create_button(t("map.generate_lots"), icon=ft.Icons.AUTO_FIX_HIGH, on_click=self._generate_codes, primary=False),
             ],
             spacing=6,
             tight=True,

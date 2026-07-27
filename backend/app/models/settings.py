@@ -10,13 +10,14 @@ aplicado no momento do pagamento.
 from datetime import datetime
 from decimal import Decimal
 from typing import List, Optional
-from beanie import Document
 from pydantic import Field
 
 from app.models.types import MongoDecimal
 
+from app.models.base import OrgDocument
 
-class SystemSettings(Document):
+
+class SystemSettings(OrgDocument):
     """
     Configuracoes globais do sistema.
     Deve existir apenas um documento desta colecao.
@@ -78,6 +79,10 @@ class SystemSettings(Document):
     # Logo da empresa (armazenada como base64 para evitar dependência de filesystem/CDN)
     logo_base64: Optional[str] = None
     logo_mime: Optional[str] = None  # "image/png", "image/jpeg", etc.
+
+    # Logo quadrada 1×1 (para o KuDE/documentos onde o espaço é um quadrado)
+    logo_cuadrado_base64: Optional[str] = None
+    logo_cuadrado_mime: Optional[str] = None
 
     # Metadata
     updated_at: datetime = Field(default_factory=datetime.utcnow)

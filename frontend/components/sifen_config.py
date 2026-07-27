@@ -79,7 +79,7 @@ class SifenConfigPanel(ft.Column):
                 _labeled("Clave", "La contraseña de acceso al portal de facturación.", self._clave),
                 _labeled("PIN de firma", "El código de firma (PIN del certificado).", self._pin),
                 self._cred_status,
-                ft.Row([create_button("Guardar credenciales", on_click=self._guardar_creds,
+                ft.Row([create_button(t("sifen.save_credentials"), on_click=self._guardar_creds,
                                       icon=ft.Icons.SAVE)]),
             ],
         )
@@ -122,7 +122,7 @@ class SifenConfigPanel(ft.Column):
                 ft.Text("PCs que pueden generar documentos electrónicos. No afecta el uso "
                         "diario del equipo.", size=12, color=COLORS["text_secondary"]),
                 self._devices_col,
-                ft.Row([create_button("Actualizar", on_click=lambda e: self._reload_devices(),
+                ft.Row([create_button(t("common.update"), on_click=lambda e: self._reload_devices(),
                                       icon=ft.Icons.REFRESH, primary=False)]),
             ],
         )

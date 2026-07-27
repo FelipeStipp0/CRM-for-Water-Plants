@@ -172,6 +172,19 @@ class APIClient:
         total = int(response.headers.get("x-total-count", len(data) if isinstance(data, list) else 0))
         return data, total
 
+    def get_bytes(self, endpoint: str, params: Optional[dict] = None) -> bytes:
+        """GET que retorna o corpo binário (ex.: XML/PDF), não JSON."""
+        response = self._request_with_retry(
+            "GET", endpoint, params=params, headers=self._headers(),
+        )
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("detail", response.text)
+            except Exception:
+                detail = response.text
+            raise APIError(response.status_code, str(detail))
+        return response.content
+
     def post_file(self, endpoint: str, file_path: str, field: str = "file") -> Any:
         """POST multipart/form-data com um único arquivo."""
         import mimetypes

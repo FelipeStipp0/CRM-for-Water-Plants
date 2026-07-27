@@ -32,6 +32,14 @@ class SettingsService:
         """Remove logo da empresa. Requer superusuário."""
         return api.delete("/settings/logo")
 
+    def upload_logo_cuadrado(self, file_path: str) -> dict:
+        """Envia a logo quadrada 1×1 (usada no KuDE). Requer master."""
+        return api.post_file("/settings/logo-cuadrado", file_path=file_path, field="file")
+
+    def delete_logo_cuadrado(self) -> dict:
+        """Remove a logo quadrada. Requer master."""
+        return api.delete("/settings/logo-cuadrado")
+
 
 # Instância global
 settings_service = SettingsService()

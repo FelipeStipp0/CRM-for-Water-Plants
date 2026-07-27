@@ -12,9 +12,13 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.models.settings import SystemSettings
 from app.models.user import User
-from app.routers.auth import get_current_active_user, get_current_master, require_scopes
+from app.routers.auth import get_current_active_user, get_current_master
 
-router = APIRouter(dependencies=[Depends(require_scopes("settings"))])
+# Sem escopo no router: a LEITURA da configuração é o cabeçalho da junta (nome,
+# RUC, endereço, horário de atención, logo, tarifas) e entra em todo documento
+# impresso — o cajero precisa dela para o recibo sair com a marca da junta.
+# Toda ESCRITA continua exigindo master, endpoint a endpoint.
+router = APIRouter()
 
 
 class SettingsResponse(BaseModel):
@@ -32,6 +36,10 @@ class SettingsResponse(BaseModel):
     consumo_minimo: int
     valor_excedente_m3: Decimal
     subsidio_porcentagem_padrao: int
+
+    # IVA da água (factura electrónica): afectacion 1=Gravado/3=Exento; tasa 0/5/10
+    iva_afectacion_agua: int
+    iva_tasa_agua: int
 
     # Faturamento
     dia_geracao_faturas: int
@@ -58,6 +66,8 @@ class SettingsResponse(BaseModel):
     # Logo
     logo_base64: Optional[str]
     logo_mime: Optional[str]
+    logo_cuadrado_base64: Optional[str]
+    logo_cuadrado_mime: Optional[str]
 
     updated_at: datetime
 
@@ -77,6 +87,10 @@ class SettingsUpdate(BaseModel):
     consumo_minimo: Optional[int] = Field(None, ge=0)
     valor_excedente_m3: Optional[Decimal] = Field(None, ge=0)
     subsidio_porcentagem_padrao: Optional[int] = Field(None, ge=0, le=100)
+
+    # IVA da água (factura electrónica)
+    iva_afectacion_agua: Optional[int] = Field(None)
+    iva_tasa_agua: Optional[int] = Field(None)
 
     # Faturamento
     dia_geracao_faturas: Optional[int] = Field(None, ge=1, le=28)
@@ -136,6 +150,8 @@ def settings_to_response(settings: SystemSettings) -> SettingsResponse:
         consumo_minimo=settings.consumo_minimo,
         valor_excedente_m3=settings.valor_excedente_m3,
         subsidio_porcentagem_padrao=settings.subsidio_porcentagem_padrao,
+        iva_afectacion_agua=settings.iva_afectacion_agua,
+        iva_tasa_agua=settings.iva_tasa_agua,
         dia_geracao_faturas=settings.dia_geracao_faturas,
         dias_vencimiento=settings.dias_vencimiento,
         valor_minimo_emissao=settings.valor_minimo_emissao,
@@ -152,6 +168,8 @@ def settings_to_response(settings: SystemSettings) -> SettingsResponse:
         alias_valor=settings.alias_valor,
         logo_base64=settings.logo_base64,
         logo_mime=settings.logo_mime,
+        logo_cuadrado_base64=settings.logo_cuadrado_base64,
+        logo_cuadrado_mime=settings.logo_cuadrado_mime,
         updated_at=settings.updated_at,
     )
 
@@ -217,6 +235,38 @@ async def delete_logo(
     """Remove a logo da empresa. Requer superusuário."""
     settings = await SystemSettings.get_instance()
     await settings.update({"$set": {"logo_base64": None, "logo_mime": None, "updated_at": datetime.utcnow()}})
+    await settings.sync()
+    return settings_to_response(settings)
+
+
+@router.post("/logo-cuadrado", response_model=SettingsResponse)
+async def upload_logo_cuadrado(
+    current_user: Annotated[User, Depends(get_current_master)],
+    file: UploadFile = File(...),
+):
+    """Upload da logo quadrada 1×1 (PNG/JPG/WebP, máx 500 KB) usada no KuDE. Requer master."""
+    mime = file.content_type or ""
+    if mime not in _ALLOWED_LOGO_MIME:
+        raise HTTPException(status_code=415, detail=f"Tipo não suportado: {mime}. Use PNG, JPG ou WebP.")
+    data = await file.read()
+    if len(data) > _MAX_LOGO_BYTES:
+        raise HTTPException(status_code=413, detail=f"Arquivo muito grande ({len(data)//1024} KB). Máx: 500 KB.")
+    b64 = base64.b64encode(data).decode("ascii")
+    settings = await SystemSettings.get_instance()
+    await settings.update({"$set": {
+        "logo_cuadrado_base64": b64, "logo_cuadrado_mime": mime, "updated_at": datetime.utcnow()}})
+    await settings.sync()
+    return settings_to_response(settings)
+
+
+@router.delete("/logo-cuadrado", response_model=SettingsResponse)
+async def delete_logo_cuadrado(
+    current_user: Annotated[User, Depends(get_current_master)],
+):
+    """Remove a logo quadrada. Requer master."""
+    settings = await SystemSettings.get_instance()
+    await settings.update({"$set": {
+        "logo_cuadrado_base64": None, "logo_cuadrado_mime": None, "updated_at": datetime.utcnow()}})
     await settings.sync()
     return settings_to_response(settings)
 

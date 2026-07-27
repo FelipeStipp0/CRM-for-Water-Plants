@@ -194,6 +194,9 @@ class PaymentDistributionService:
         aplicar_subsidio: bool = True,
         recibido_por: Optional[str] = None,
         observacion: Optional[str] = None,
+        invoice_ids: Optional[List[PydanticObjectId]] = None,
+        prepay_periods: Optional[List[tuple]] = None,
+        cash_session_id: Optional[PydanticObjectId] = None,
     ) -> DistributionResult:
         """
         Processa um pagamento com distribuicao automatica e subsidio.
@@ -238,8 +241,38 @@ class PaymentDistributionService:
         # Verifica se cliente tem subsidio (apenas se flag ativa)
         subsidy_info = await cls.get_subsidy_info(client) if aplicar_subsidio else None
 
-        # Busca faturas pendentes
-        invoices = await cls.get_outstanding_invoices(client_id)
+        # Adiantamento: gera (ou reaproveita) as faturas minimas dos meses futuros
+        # pedidos. Ficam no conjunto-alvo para serem quitadas nesta transacao.
+        prepay_invoice_ids: List[PydanticObjectId] = []
+        if prepay_periods:
+            from app.services.invoice_generation import InvoiceGenerationService
+            prepay_settings = await SystemSettings.get_instance()
+            for mes, ano in prepay_periods:
+                inv = await InvoiceGenerationService.generate_prepaid_month(
+                    client, int(mes), int(ano), prepay_settings)
+                if inv:
+                    prepay_invoice_ids.append(inv.id)
+
+        # Selecao das faturas-alvo:
+        # - direcionado (invoice_ids e/ou adiantamento) -> so as marcadas + adiantadas;
+        # - senao -> todas as pendentes (mais antiga -> recente), comportamento historico.
+        targeted = bool(invoice_ids) or bool(prepay_invoice_ids)
+        if targeted:
+            wanted = set(invoice_ids or []) | set(prepay_invoice_ids)
+            invoices = await Invoice.find(
+                {
+                    "client.$id": client_id,
+                    "_id": {"$in": list(wanted)},
+                    "saldo_devedor": {"$gt": 0},
+                    "status": {"$ne": InvoiceStatus.ANULADA.value},
+                }
+            ).sort([
+                ("ano_referencia", 1),
+                ("mes_referencia", 1),
+                ("fecha_emision", 1),
+            ]).to_list()
+        else:
+            invoices = await cls.get_outstanding_invoices(client_id)
 
         if not invoices and valor_total > 0:
             return DistributionResult(
@@ -280,6 +313,8 @@ class PaymentDistributionService:
         # Numero sequencial legivel do recibo (5 digitos na exibicao).
         numero_recibo = await Counter.get_next("receipt_number")
 
+        # `cash_session_id` vem do router (resolvido pelo USERNAME do operador —
+        # `recibido_por` guarda o nome de exibicao e nao serve de chave).
         payment = Payment(
             client=client,
             valor_total=valor_total,
@@ -289,6 +324,7 @@ class PaymentDistributionService:
             allocations=payment_allocations,
             recibido_por=recibido_por,
             observacion=observacion,
+            cash_session_id=cash_session_id,
         )
         await payment.insert()
 
@@ -353,6 +389,7 @@ class PaymentDistributionService:
             reference_id=payment.id,
             reference_type="payment",
             registrado_por=recibido_por,
+            cash_session_id=cash_session_id,
         )
         await transaction.insert()
 

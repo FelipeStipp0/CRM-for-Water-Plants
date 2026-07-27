@@ -88,6 +88,15 @@ class ClientService:
         """Retorna saldo pendente total do cliente."""
         return api.get(f"/invoices/client/{client_id}/pending-balance")
 
+    def get_payment_context(self, client_id: str, meses_futuro: int = 6) -> dict:
+        """
+        Contexto do cobro numa unica chamada: cliente + saldo + faturas + taxa.
+
+        `meses_futuro` estica a grade de meses para frente (adiantar o ano todo).
+        """
+        return api.get(f"/clients/{client_id}/payment-context",
+                       params={"meses_futuro": meses_futuro})
+
 
 # Instância global
 client_service = ClientService()

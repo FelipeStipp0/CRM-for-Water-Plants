@@ -9,13 +9,15 @@ como produto (não há mais item em texto livre na emissão).
 from datetime import datetime
 from typing import Optional
 
-from beanie import Document, Indexed
+from beanie import Indexed
 from pydantic import Field
 
 from app.models.types import MongoDecimal
 
+from app.models.base import OrgDocument
 
-class Product(Document):
+
+class Product(OrgDocument):
     """Produto/serviço faturável."""
 
     codigo: Indexed(str, unique=True)  # type: ignore[valid-type]

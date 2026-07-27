@@ -47,10 +47,10 @@ class ProductsView(ft.Container):
             expand=True,
             controls=[
                 ft.Row([
-                    create_header("Productos / Servicios"),
+                    create_header(t("products.title")),
                     ft.Container(expand=True),
-                    create_button("Nuevo producto", icon=ft.Icons.ADD, on_click=lambda e: self._open_modal()),
-                    create_button("Actualizar", icon=ft.Icons.REFRESH, primary=False,
+                    create_button(t("products.new"), icon=ft.Icons.ADD, on_click=lambda e: self._open_modal()),
+                    create_button(t("common.update"), icon=ft.Icons.REFRESH, primary=False,
                                   on_click=lambda e: self._reload()),
                 ]),
                 ft.Container(height=SPACING["sm"]),
@@ -158,8 +158,8 @@ class ProductsView(ft.Container):
                 error_text,
             ], spacing=12, tight=True),
             actions=[
-                ModalAction("Cancelar", on_click=lambda ev: modal.close()),
-                ModalAction("Guardar", on_click=_save, primary=True),
+                ModalAction(t("common.cancel"), on_click=lambda ev: modal.close()),
+                ModalAction(t("common.save"), on_click=_save, primary=True),
             ],
             width_pct=0.4,
         )

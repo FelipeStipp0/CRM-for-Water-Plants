@@ -11,10 +11,12 @@ from datetime import datetime, date
 from decimal import Decimal
 from enum import Enum
 from typing import Optional, List
-from beanie import Document, Indexed, Link, PydanticObjectId
+from beanie import Indexed, Link, PydanticObjectId
 from pydantic import Field, BaseModel
 
 from app.models.types import MongoDecimal
+
+from app.models.base import OrgDocument
 
 
 class TransactionType(str, Enum):
@@ -37,9 +39,10 @@ class TransactionCategory(str, Enum):
     DESPESA_SERVICO = "DESPESA_SERVICO"
     DESPESA_MANUTENCAO = "DESPESA_MANUTENCAO"
     OUTROS_SAIDA = "OUTROS_SAIDA"
+    ESTORNO_PAGAMENTO = "ESTORNO_PAGAMENTO"  # Compensa a ENTRADA de um pagamento anulado
 
 
-class CashTransaction(Document):
+class CashTransaction(OrgDocument):
     """
     Movimentacao de caixa.
 
@@ -63,6 +66,9 @@ class CashTransaction(Document):
     # Quem registrou
     registrado_por: Optional[str] = None
 
+    # Sessao de caja aberta no momento do lancamento (None = fora do Modo Caja).
+    cash_session_id: Optional[PydanticObjectId] = None
+
     # Metadata
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -72,6 +78,7 @@ class CashTransaction(Document):
             [("tipo", 1), ("fecha", -1)],
             [("categoria", 1), ("fecha", -1)],
             [("fecha", -1)],
+            [("cash_session_id", 1)],
         ]
 
     def __repr__(self) -> str:
@@ -104,7 +111,7 @@ class ExpenseItem(BaseModel):
         return Decimal(self.cantidad) * self.precio_unitario
 
 
-class Expense(Document):
+class Expense(OrgDocument):
     """
     Despesa/Fatura de fornecedor.
 
@@ -170,7 +177,7 @@ class EmployeeRole(str, Enum):
     OUTROS = "OUTROS"
 
 
-class Employee(Document):
+class Employee(OrgDocument):
     """
     Funcionario da Junta.
     """
@@ -218,7 +225,7 @@ class PayrollType(str, Enum):
     DESCONTO = "DESCONTO"
 
 
-class Payroll(Document):
+class Payroll(OrgDocument):
     """
     Folha de pagamento / Lancamento de salario.
     """
@@ -253,3 +260,73 @@ class Payroll(Document):
 
     def __repr__(self) -> str:
         return f"Payroll({self.tipo.value}: {self.valor_liquido})"
+
+
+class CashSessionStatus(str, Enum):
+    """Estado da sessao de caja."""
+    ABIERTA = "ABIERTA"
+    CERRADA = "CERRADA"
+
+
+class CashSession(OrgDocument):
+    """
+    Sessao de caja: um turno completo, da apertura ao cierre.
+
+    O operador ABRE a caja informando o monto inicial (fondo de cambio), cobra
+    durante o turno (cada Payment fica carimbado com o id desta sessao) e no fim
+    CIERRA contando o efectivo fisico. Fica gravado o esperado pelo sistema, o
+    contado e a diferencia. Documento auditavel — nao se apaga nem se reabre.
+
+    `numero` e sequencial por ordem de apertura (Counter "cash_session"): a
+    primeira caja aberta na junta e a 1, a proxima 2, e assim por diante. Nunca
+    reinicia, para que "Caja 07" identifique um turno unico no historico.
+    """
+
+    numero: Indexed(int, unique=True)
+    status: CashSessionStatus = CashSessionStatus.ABIERTA
+    operador: str  # username dono do turno
+
+    # Apertura
+    fecha_apertura: datetime = Field(default_factory=datetime.utcnow)
+    monto_inicial: MongoDecimal = Decimal("0")  # fondo de cambio na gaveta
+    abierto_por: str
+
+    # Cierre (preenchido no fechamento)
+    fecha_cierre: Optional[datetime] = None
+    cerrado_por: Optional[str] = None
+
+    cantidad_pagos: int = 0
+    ingresos_efectivo: MongoDecimal = Decimal("0")
+    ingresos_transferencia: MongoDecimal = Decimal("0")
+    ingresos_cheque: MongoDecimal = Decimal("0")
+    ingresos_total: MongoDecimal = Decimal("0")
+
+    estornos_cantidad: int = 0
+    estornos_total: MongoDecimal = Decimal("0")
+    estornos_efectivo: MongoDecimal = Decimal("0")  # anulados de pagos en efectivo
+    # Recorte dos acima cujo pagamento original NAO e deste turno: so esses saem
+    # da gaveta (anular um pagamento do proprio turno ja o tira dos ingressos).
+    estornos_efectivo_previos: MongoDecimal = Decimal("0")
+
+    efectivo_esperado: MongoDecimal = Decimal("0")  # inicial + efectivo − estornos previos
+    efectivo_fisico: MongoDecimal = Decimal("0")     # contado pelo operador
+    diferencia: MongoDecimal = Decimal("0")          # fisico − esperado
+
+    observaciones: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "cash_sessions"
+        indexes = [
+            [("numero", -1)],
+            [("status", 1), ("operador", 1)],
+            [("fecha_apertura", -1)],
+        ]
+
+    @property
+    def numero_fmt(self) -> str:
+        """Numero da caja com 2 digitos no minimo (ex.: '07', '123')."""
+        return f"{self.numero:02d}"
+
+    def __repr__(self) -> str:
+        return f"CashSession(Caja {self.numero_fmt} {self.status.value} op={self.operador})"

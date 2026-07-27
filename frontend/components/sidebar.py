@@ -14,7 +14,7 @@ class Sidebar(ft.Container):
     def __init__(
         self,
         on_navigate,
-        current_route: str = "/clients",
+        current_route: str = "/dashboard",
         allowed_scopes: list[str] | None = None,
         is_superuser: bool = False,
         on_logout=None,
@@ -27,6 +27,7 @@ class Sidebar(ft.Container):
         self.on_logout = on_logout
 
         self.menu_items = [
+            {"icon": ft.Icons.SPACE_DASHBOARD_OUTLINED, "label_key": "nav.dashboard", "route": "/dashboard", "scope": None},
             {"icon": ft.Icons.GROUP_OUTLINED, "label_key": "nav.clients", "route": "/clients", "scope": "clients"},
             {"icon": ft.Icons.WATER_DROP_OUTLINED, "label_key": "nav.readings", "route": "/readings", "scope": "readings"},
             {"icon": ft.Icons.RECEIPT_LONG_OUTLINED, "label_key": "nav.invoices", "route": "/invoices", "scope": "invoices"},

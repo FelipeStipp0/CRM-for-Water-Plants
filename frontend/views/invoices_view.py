@@ -115,7 +115,7 @@ class InvoicesView(ft.Container):
                 create_button(t("invoices.btn.print_bulk"), icon=ft.Icons.PRINT, on_click=lambda e: self._print_bulk_filtered(), primary=False),
                 create_button(t("invoices.btn.generate_bulk"), icon=ft.Icons.AUTO_AWESOME, on_click=self._open_generate_modal),
                 create_button(t("invoices.btn.custom"), icon=ft.Icons.ADD_CARD, on_click=self._open_custom_modal, primary=False),
-                create_button("Factura electrónica", icon=ft.Icons.RECEIPT_LONG, on_click=self._open_sifen_modal, primary=False),
+                create_button(t("sifen.electronic_invoice"), icon=ft.Icons.RECEIPT_LONG, on_click=self._open_sifen_modal, primary=False),
             ],
             alignment=ft.MainAxisAlignment.END,
             spacing=SPACING["sm"],
@@ -137,7 +137,7 @@ class InvoicesView(ft.Container):
                 self.date_from_field,
                 self.date_to_field,
                 self.status_dd,
-                create_button("Aplicar Filtros", icon=ft.Icons.FILTER_ALT, on_click=lambda e: (self.pagination.reset(), self._run_load_invoices(skip=0)), primary=False),
+                create_button(t("invoices.apply_filters"), icon=ft.Icons.FILTER_ALT, on_click=lambda e: (self.pagination.reset(), self._run_load_invoices(skip=0)), primary=False),
                 create_button(t("invoices.btn.clear"), icon=ft.Icons.CLEAR, on_click=self._clear_filters, primary=False),
             ],
             wrap=True,
@@ -564,7 +564,7 @@ class InvoicesView(ft.Container):
             actions=[
                 ModalAction(t("common.close"), on_click=lambda e: modal.close()),
                 ModalAction(t("invoices.btn.preview"), on_click=run_preview),
-                ModalAction("Imprimir", on_click=run_print, primary=True),
+                ModalAction(t("invoices.btn.print"), on_click=run_print, primary=True),
             ],
         )
         modal.open()

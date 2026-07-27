@@ -23,8 +23,10 @@ from services.pdf_generation.invoices import (  # noqa: E402
 )
 from services.pdf_generation.receipts import PaymentReceiptP80Generator  # noqa: E402
 from services.pdf_generation.finance import (  # noqa: E402
-    FinanceReportGenerator, EmployeePaymentGenerator, ExpenseReceiptGenerator,
+    CierreCajaP80Generator, FinanceReportGenerator, EmployeePaymentGenerator,
+    ExpenseReceiptGenerator,
 )
+from services.pdf_generation.kude import KudeA4Generator, KudeP80Generator  # noqa: E402
 from services.pdf_generation.notifications import (  # noqa: E402
     CutNoticeGenerator, ReactivationRequestGenerator,
 )
@@ -180,6 +182,32 @@ def reactivation_request() -> dict:
     }
 
 
+def cierre_caja() -> dict:
+    return {
+        "company": COMPANY,
+        "numero_fmt": "Caja 07",
+        "operador": "cajero1",
+        "fecha_apertura": now - timedelta(hours=9),
+        "fecha_cierre": now,
+        "monto_inicial": 100000,
+        "cantidad_pagos": 23,
+        "ingresos_efectivo": 1450000,
+        "ingresos_transferencia": 320000,
+        "ingresos_cheque": 0,
+        "estornos_efectivo_previos": 63000,
+        "efectivo_esperado": 1487000,
+        "efectivo_fisico": 1482000,
+        "diferencia": -5000,
+        "observaciones": "Falta por vuelto mal dado en el cobro de la tarde.",
+    }
+
+
+def kude_xml() -> bytes:
+    """XML SIFEN real (assinado) usado como base dos dois KuDE."""
+    with open(os.path.join(OUT_DIR, "_sample.xml"), "rb") as f:
+        return f.read()
+
+
 DOCS = [
     ("01_factura_A4",          InvoiceA4Generator(),        invoice_payload()),
     ("02_factura_P80_ticket",  InvoiceP80Generator(),       invoice_payload()),
@@ -190,6 +218,9 @@ DOCS = [
     ("07_comprobante_gasto",   ExpenseReceiptGenerator(),   expense_receipt()),
     ("08_aviso_corte",         CutNoticeGenerator(),        cut_notice()),
     ("09_orden_reactivacion",  ReactivationRequestGenerator(), reactivation_request()),
+    ("10_cierre_caja_P80",     CierreCajaP80Generator(),    cierre_caja()),
+    ("11_kude_factura_P80",    KudeP80Generator(),          kude_xml),
+    ("12_kude_factura_A4",     KudeA4Generator(),           kude_xml),
 ]
 
 
@@ -198,7 +229,8 @@ def main() -> None:
     paths = []
     for name, generator, data in DOCS:
         try:
-            pdf_bytes = generator.generate(data)
+            # data pode ser callable (lê arquivo na hora — não derruba o resto se faltar)
+            pdf_bytes = generator.generate(data() if callable(data) else data)
             path = os.path.join(OUT_DIR, f"{name}.pdf")
             with open(path, "wb") as f:
                 f.write(pdf_bytes)

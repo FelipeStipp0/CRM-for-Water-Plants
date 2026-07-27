@@ -45,6 +45,18 @@ class SifenService:
     def get_emision(self, emission_id: str) -> dict:
         return api.get(f"/sifen/emision/{emission_id}")
 
+    def abortar(self, emission_id: str) -> dict:
+        """Desiste da emissão ANTES da firma. 409 se o documento já foi assinado."""
+        return api.post(f"/sifen/emision/{emission_id}/abortar", data={})
+
+    def ultimo_numero(self) -> dict:
+        """Último documento emitido por este sistema (o SET é quem numera)."""
+        return api.get("/sifen/ultimo-numero")
+
+    def get_emision_xml(self, emission_id: str) -> bytes:
+        """XML assinado (dsig + dCarQR) de uma emissão EMITIDA — para gerar o KuDE."""
+        return api.get_bytes(f"/sifen/emision/{emission_id}/xml")
+
     def listar_emisiones(self, status: Optional[str] = None, limit: int = 50) -> list[dict]:
         params = {"limit": limit}
         if status:
@@ -71,6 +83,14 @@ class SifenService:
 
     def patch_result(self, emission_id: str, payload: dict) -> dict:
         return api.patch(f"/sifen/coordinator/{emission_id}", data=payload)
+
+    def report_fase(self, emission_id: str, fase: str,
+                    cdc: Optional[str] = None) -> dict:
+        """Reporta a fase corrente e devolve a emissão (é onde o abort aparece)."""
+        body: dict = {"fase": fase}
+        if cdc:
+            body["cdc"] = cdc
+        return api.post(f"/sifen/coordinator/{emission_id}/fase", data=body)
 
     def listar_coordinators(self) -> list[dict]:
         return api.get("/sifen/coordinators")

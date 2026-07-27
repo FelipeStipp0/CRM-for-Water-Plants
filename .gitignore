@@ -89,3 +89,6 @@ backend/app/services/sifen/_adapter/
 # Adapter SIFEN bundlado no frontend (junction, repo fechado)
 frontend/services/sifen_adapter
 frontend/services/sifen_adapter/
+
+# Handoff de sessão: notas internas, nunca vão para o repo
+HANDOFF.md

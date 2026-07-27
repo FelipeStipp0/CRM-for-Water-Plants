@@ -2,7 +2,7 @@
 Endpoints de clientes.
 """
 
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 from typing import Annotated, List, Optional
 
@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.models.client import Client, ClientStatus
 from app.models.invoice import Invoice, InvoiceStatus
+from app.models.settings import SystemSettings
 from app.models.user import User
 from app.routers.auth import get_current_active_user, require_scopes
 from app.schemas.client import (
@@ -250,6 +251,101 @@ async def get_client(
         raise HTTPException(status_code=404, detail="Cliente nao encontrado")
 
     return client_to_response(client)
+
+
+@router.get("/{client_id}/payment-context")
+async def get_payment_context(
+    client_id: str,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    meses_futuro: int = Query(6, ge=0, le=36),
+):
+    """
+    Contexto completo para o modal de cobro numa unica chamada: dados do cliente,
+    saldo/faturas pendentes (detalhadas, mais antigas primeiro) e taxa de reativacao.
+    Substitui os 3 round-trips (get + pending-balance + list_by_client) do frontend.
+
+    `meses_futuro` estica a grade para frente (o cajero que quer adiantar o ano
+    inteiro pede 12, 18...). O teto de 36 evita uma grade infinita por engano.
+    """
+    try:
+        cid = PydanticObjectId(client_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="client_id invalido")
+
+    client = await Client.get(cid)
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente nao encontrado")
+
+    pendientes = await Invoice.find(
+        {"client.$id": cid},
+        Invoice.saldo_devedor > 0,
+        Invoice.status != InvoiceStatus.ANULADA,
+    ).to_list()
+    pendientes.sort(key=lambda inv: (inv.ano_referencia, inv.mes_referencia))
+
+    facturas = [
+        {
+            "numero_factura": inv.numero_factura,
+            "mes_referencia": inv.mes_referencia,
+            "ano_referencia": inv.ano_referencia,
+            "saldo_devedor": inv.saldo_devedor,
+            "valor_total": inv.valor_total,
+            "status": inv.status,
+        }
+        for inv in pendientes
+    ]
+
+    settings = await SystemSettings.get_instance()
+
+    # Grade de meses (para o Modo Caja): de -3 a +`meses_futuro` do atual, mais
+    # qualquer pendente mais antiga. Cada célula: pago / pendente / sem factura.
+    todas = await Invoice.find(
+        {"client.$id": cid},
+        Invoice.status != InvoiceStatus.ANULADA,
+    ).to_list()
+
+    def _add(key: tuple, n: int) -> tuple:
+        idx = key[0] * 12 + (key[1] - 1) + n
+        return idx // 12, idx % 12 + 1
+
+    por_mes: dict = {}
+    for inv in todas:
+        k = (inv.ano_referencia, inv.mes_referencia)
+        cell = por_mes.setdefault(k, {"saldo": Decimal("0"), "invoice_ids": [], "pendente": False})
+        if inv.saldo_devedor and inv.saldo_devedor > 0:
+            cell["saldo"] += inv.saldo_devedor
+            cell["invoice_ids"].append(str(inv.id))
+            cell["pendente"] = True
+
+    hoy = date.today()
+    atual = (hoy.year, hoy.month)
+    pendentes_keys = [k for k, v in por_mes.items() if v["pendente"]]
+    inicio = min([_add(atual, -3)] + pendentes_keys)
+    fim = _add(atual, meses_futuro)
+
+    grade = []
+    k = inicio
+    while k <= fim:
+        v = por_mes.get(k)
+        if v is None:
+            estado = "sem_factura"
+            grade.append({"ano": k[0], "mes": k[1], "estado": estado,
+                          "saldo": Decimal("0"), "invoice_ids": []})
+        else:
+            estado = "pendente" if v["pendente"] else "pagada"
+            grade.append({"ano": k[0], "mes": k[1], "estado": estado,
+                          "saldo": v["saldo"], "invoice_ids": v["invoice_ids"]})
+        k = _add(k, 1)
+
+    return {
+        "client": client_to_response(client),
+        "saldo_pendiente": sum(inv.saldo_devedor for inv in pendientes),
+        "facturas_pendientes": len(pendientes),
+        "facturas": facturas,
+        "taxa_reativacao": settings.taxa_reativacao,
+        "tarifa_base": settings.tarifa_base,
+        "grade_meses": grade,
+    }
 
 
 @router.patch("/{client_id}", response_model=ClientResponse)

@@ -6,11 +6,13 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Optional, List
-from beanie import Document, Indexed, Link, PydanticObjectId
+from beanie import Indexed, Link, PydanticObjectId
 from pydantic import Field, BaseModel
 
 from app.models.client import Client
 from app.models.types import MongoDecimal
+
+from app.models.base import OrgDocument
 
 
 class PaymentMethod(str, Enum):
@@ -31,7 +33,7 @@ class PaymentAllocation(BaseModel):
     ano_referencia: int
 
 
-class Payment(Document):
+class Payment(OrgDocument):
     """
     Pagamento recebido de um cliente.
 
@@ -60,8 +62,18 @@ class Payment(Document):
     # Quem recebeu
     recibido_por: Optional[str] = None
 
+    # Sessao de caja em que o pagamento foi cobrado (None = fora do Modo Caja).
+    # Carimbado na criacao: e o que amarra o pagamento ao cierre daquele turno.
+    cash_session_id: Optional[PydanticObjectId] = None
+
     # Observacoes
     observacion: Optional[str] = None
+
+    # Anulação (estorno): preserva o registro em vez de apagar.
+    anulada: bool = False
+    anulada_por: Optional[str] = None
+    anulada_at: Optional[datetime] = None
+    motivo_anulacion: Optional[str] = None
 
     # Datas
     fecha_pago: datetime = Field(default_factory=datetime.utcnow)
@@ -76,6 +88,7 @@ class Payment(Document):
             [("client.$id", 1), ("fecha_pago", -1)],
             [("grupo_pagamento", 1)],
             [("numero_recibo", 1)],
+            [("cash_session_id", 1)],
         ]
 
     def __repr__(self) -> str:

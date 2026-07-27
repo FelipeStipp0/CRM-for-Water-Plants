@@ -1,0 +1,86 @@
+{
+  "common.consult": {
+    "es": "Consultar",
+    "pt": "Consultar"
+  },
+  "common.filter": {
+    "es": "Filtrar",
+    "pt": "Filtrar"
+  },
+  "common.search": {
+    "es": "Buscar",
+    "pt": "Buscar"
+  },
+  "cutoff.add_selected": {
+    "es": "Agregar seleccionados",
+    "pt": "Adicionar selecionados"
+  },
+  "cutoff.process_expired": {
+    "es": "Procesar vencidos",
+    "pt": "Processar vencidos"
+  },
+  "cutoff.request_reactivation": {
+    "es": "Solicitar reactivación",
+    "pt": "Solicitar reativação"
+  },
+  "finance.new_employee": {
+    "es": "Nuevo funcionario",
+    "pt": "Novo funcionário"
+  },
+  "finance.new_expense": {
+    "es": "Nuevo gasto",
+    "pt": "Nova despesa"
+  },
+  "finance.new_payroll": {
+    "es": "Nuevo pago de sueldo",
+    "pt": "Novo pagamento de salário"
+  },
+  "finance.new_transaction": {
+    "es": "Nueva transacción",
+    "pt": "Nova transação"
+  },
+  "finance.print_report": {
+    "es": "Imprimir informe",
+    "pt": "Imprimir relatório"
+  },
+  "finance.refresh_cash": {
+    "es": "Actualizar caja",
+    "pt": "Atualizar caixa"
+  },
+  "invoices.apply_filters": {
+    "es": "Aplicar Filtros",
+    "pt": "Aplicar Filtros"
+  },
+  "map.generate_lots": {
+    "es": "Generar lotes",
+    "pt": "Gerar lotes"
+  },
+  "payments.search_invoice": {
+    "es": "Buscar factura",
+    "pt": "Buscar fatura"
+  },
+  "products.new": {
+    "es": "Nuevo producto",
+    "pt": "Novo produto"
+  },
+  "products.title": {
+    "es": "Productos / Servicios",
+    "pt": "Produtos / Serviços"
+  },
+  "sifen.electronic_invoice": {
+    "es": "Factura electrónica",
+    "pt": "Fatura eletrônica"
+  },
+  "sifen.emit": {
+    "es": "Emitir",
+    "pt": "Emitir"
+  },
+  "sifen.save_credentials": {
+    "es": "Guardar credenciales",
+    "pt": "Salvar credenciais"
+  },
+  "sponsors.generate_monthly_invoice": {
+    "es": "Generar factura mensual",
+    "pt": "Gerar fatura mensal"
+  }
+}

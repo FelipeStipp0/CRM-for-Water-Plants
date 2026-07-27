@@ -3,7 +3,7 @@ Shared styles/helpers for PDF generation.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -84,6 +84,33 @@ def format_date(value: Any, include_time: bool = False) -> str:
     if dt is None:
         return "-"
     return dt.strftime("%d/%m/%Y %H:%M" if include_time else "%d/%m/%Y")
+
+
+def format_local_datetime(value: Any) -> str:
+    """
+    Data + hora de um instante gravado pelo backend, na hora local.
+
+    O backend grava com `datetime.utcnow()` (naive, em UTC): sem converter, o
+    comprovante sai com a hora errada. Só para timestamps reais — para datas
+    puras (vencimento, referência) use `format_date`, que não desloca o dia.
+    """
+    dt: datetime | None = None
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        raw = value.strip()
+        if "T" not in raw and " " not in raw:
+            # Data pura: não tem instante para converter (deslocaria o dia).
+            return format_date(raw)
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except Exception:
+            dt = None
+    if dt is None:
+        return "-"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone().strftime("%d/%m/%Y %H:%M")
 
 
 def draw_h_rule(c, x: float, y: float, w: float, color=None, thickness: float = 0.4):

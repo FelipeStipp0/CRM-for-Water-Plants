@@ -9,8 +9,10 @@ A diferenciacao financeira e feita via Subsidio no pagamento.
 from datetime import datetime
 from enum import Enum
 from typing import Optional
-from beanie import Document, Indexed, PydanticObjectId
+from beanie import Indexed, PydanticObjectId
 from pydantic import Field
+
+from app.models.base import OrgDocument
 
 
 class ClientCategory(str, Enum):
@@ -30,7 +32,7 @@ class ClientStatus(str, Enum):
     CORTADO = "CORTADO"
 
 
-class Client(Document):
+class Client(OrgDocument):
     """
     Cliente/assinante do servico de agua.
     Contem dados pessoais, localizacao e informacoes do servico.

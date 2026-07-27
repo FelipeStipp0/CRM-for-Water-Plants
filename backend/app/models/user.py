@@ -13,11 +13,13 @@ Roles:
 
 from datetime import datetime
 from typing import Optional, List, Literal
-from beanie import Document, Indexed
+from beanie import Indexed
 from pydantic import Field
 
+from app.models.base import OrgDocument
 
-class User(Document):
+
+class User(OrgDocument):
     """Usuario do sistema com credenciais de acesso."""
 
     username: Indexed(str, unique=True)

@@ -27,10 +27,16 @@ from app.services.sifen import receptor as _receptor       # pipeline puro
 from app.services.sifen import dte_builder as _dte_builder
 from services.sifen_adapter import build_provider          # adapter fechado (junction)
 from services.sifen_service import sifen_service
+from services.sifen_coordinator import EmissionAborted
 
 
 class EmissionFailed(Exception):
     """Falha de negócio/firma (vira FALHOU, sem guardar)."""
+
+
+def _sem_fase(_fase: str, _cdc=None) -> dict:
+    """Sem reporte de fase (uso direto do executor, fora do coordenador)."""
+    return {}
 
 
 def _extrai(xml: bytes, tag: str):
@@ -38,12 +44,43 @@ def _extrai(xml: bytes, tag: str):
     return m.group(1).decode("utf-8", "ignore") if m else None
 
 
-def emitir_job(job: dict) -> dict:
+def cancelar_job(job: dict) -> dict:
+    """
+    Executor local da cancelación fiscal: login → cancelar(cdc, motivo) → logout.
+    Levanta em falha (o loop reporta `cancel_error` e o job sai da fila).
+    """
+    cdc = job.get("cdc")
+    if not cdc:
+        raise EmissionFailed("Emisión sin CDC — no hay documento que cancelar")
+
+    creds = sifen_service.get_credenciais()
+    prov = build_provider(creds["ruc"], creds["clave"], creds["pin"])
+    t0 = time.perf_counter()
+    prov.login()
+    try:
+        prov.cancelar(cdc, job.get("cancel_motivo") or "Anulación de pago")
+        return {"phases_ms": {"cancelar": int((time.perf_counter() - t0) * 1000)}}
+    finally:
+        try:
+            prov.logout()
+        except Exception:
+            pass
+
+
+def emitir_job(job: dict, on_fase=None) -> dict:
     """
     Executor local. Retorna {cdc, numero_documento, dprot_aut, xml_r2_key, phases_ms}.
     Levanta em falha (o loop marca FALHOU).
+
+    `on_fase(fase, cdc=None) -> dict` reporta o andamento (o operador pode estar
+    em outro PC) e devolve o estado atual da emissão no backend — é por aí que
+    chega o pedido de desistência. Só olhamos esse pedido ANTES da firma: depois
+    dela o documento existe no SET e a única saída é o evento de cancelación.
+    O CDC vai junto assim que `generar` responde, porque é dele que sai o número
+    da factura que o operador vê na tela (e a reconciliação, se o PC cair).
     """
     phases: dict = {}
+    on_fase = on_fase or _sem_fase
 
     def timed(name, fn):
         t0 = time.perf_counter()
@@ -53,6 +90,7 @@ def emitir_job(job: dict) -> dict:
 
     creds = sifen_service.get_credenciais()  # {ruc, clave, pin} — decifrado p/ a org
     prov = build_provider(creds["ruc"], creds["clave"], creds["pin"])
+    on_fase("GENERAR")
     timed("login", prov.login)
     try:
         rec = timed("resolver", lambda: _receptor.resolver_receptor(
@@ -64,8 +102,16 @@ def emitir_job(job: dict) -> dict:
             job.get("condicion") or {"tipo": "contado",
                                      "forma_pago": {"codigo": 1, "desc": "Efectivo"}})
         g = timed("generar", lambda: prov.generar(dte))
+
+        # Ponto de não-retorno: reportar FIRMAR devolve o estado atual, e é a
+        # última chance de ver que o operador desistiu.
+        estado = on_fase("FIRMAR", g["cdc"]) or {}
+        if estado.get("abort_solicitado"):
+            raise EmissionAborted("emisión abortada por el operador antes de la firma")
+
         if not timed("sign", lambda: prov.sign(g["url_proceso"])):
             raise EmissionFailed("firma falhou (breaker) — documento NÃO guardado")
+        on_fase("RECUPERAR")
         timed("guardar", lambda: prov.guardar(g["proceso_id"], g["documento_id"]))
         xml = timed("xml", lambda: prov.baixar_xml(g["cdc"]))
         if b"dsig:Signature" not in xml or b"<dCarQR>" not in xml:

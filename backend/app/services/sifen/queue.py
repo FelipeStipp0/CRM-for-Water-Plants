@@ -2,6 +2,9 @@
 Fila de emissão da facturación electrónica (processada pelo coordenador).
 
 - `claim_next`: pega atomicamente o próximo job PENDENTE (marca PROCESSANDO).
+- `solicitar_cancelacion` / `claim_next_cancelacion` / `processar_cancelacion`:
+  o evento de cancelación fiscal de um DTE já emitido (disparado pelo estorno do
+  pagamento). Mesma sessão única e mesmo lock da emissão.
 - `processar_emissao`: roda o pipeline contra o portal, com **lock de sessão único**,
   **breaker** (não guarda se a firma falha), **logout sempre**, validação do XML
   (dsig+QR), gravação no R2 e **auto-retry** em erro de rede. Idempotente: se o job
@@ -62,7 +65,8 @@ async def claim_next(holder: str) -> Optional[SifenEmission]:
     now = datetime.utcnow()
     coll = SifenEmission.get_pymongo_collection()
     doc = await coll.find_one_and_update(
-        {"status": EmissionStatus.PENDENTE.value},
+        {"status": EmissionStatus.PENDENTE.value,
+         "abort_solicitado": {"$ne": True}},   # o operador desistiu antes da firma
         {"$set": {"status": EmissionStatus.PROCESSANDO.value,
                   "locked_by": holder, "locked_at": now, "started_at": now,
                   "updated_at": now}},
@@ -78,18 +82,131 @@ async def claim_next(holder: str) -> Optional[SifenEmission]:
     return await SifenEmission.get(doc["_id"])
 
 
+async def claim_next_cancelacion(holder: str) -> Optional[SifenEmission]:
+    """
+    Reivindica a próxima cancelación pendente (DTE emitido que o CRM anulou).
+
+    O `status` continua EMITIDA enquanto o SET não aceitar o evento — quem marca
+    o claim é `cancel_locked_by`, não o status. Assim uma cancelación que falha
+    não apaga o fato de que o documento está emitido e válido.
+    """
+    now = datetime.utcnow()
+    coll = SifenEmission.get_pymongo_collection()
+    doc = await coll.find_one_and_update(
+        {
+            "status": EmissionStatus.EMITIDA.value,
+            "cancel_solicitada": True,
+            "cancelada_at": None,
+            "cancel_locked_by": None,
+            "cancel_error": None,   # erro de negócio trava até alguém pedir de novo
+            "cdc": {"$nin": [None, ""]},
+        },
+        {"$set": {"cancel_locked_by": holder, "cancel_locked_at": now, "updated_at": now}},
+        sort=[("cancel_solicitada_at", 1)],
+        return_document=ReturnDocument.AFTER,
+    )
+    return await SifenEmission.get(doc["_id"]) if doc else None
+
+
 async def claim_for_device(machine_id: str) -> Optional[SifenEmission]:
     """
     Serve o próximo job a um device — **gateado pelo lock de sessão** (jamais duas
     sessões). Só entrega job se este device conseguir o lock; se não houver job,
     devolve o lock na hora. O lock fica retido até o device concluir (release_sessao).
+
+    Emissão tem prioridade sobre cancelación: quem espera na emissão é o cliente
+    no balcão; a cancelación é assíncrona por natureza.
     """
     if not await lock.adquirir(machine_id):
         return None  # outro device está com a sessão aberta
     job = await claim_next(machine_id)
     if job is None:
+        job = await claim_next_cancelacion(machine_id)
+    if job is None:
         await lock.liberar(machine_id)  # nada a fazer → solta a sessão
         return None
+    return job
+
+
+async def solicitar_cancelacion(
+    emission: SifenEmission, motivo: str, usuario: str,
+) -> SifenEmission:
+    """
+    Marca um DTE emitido para cancelación (o coordenador executa depois).
+
+    Só faz sentido para EMITIDA — um job PENDENTE/FALHOU nunca chegou ao SET e
+    não tem o que cancelar. Pedir de novo em cima de um pedido já na fila não
+    muda nada; em cima de um que falhou por regra de negócio, **limpa o erro** e
+    devolve à fila (é assim que se tenta outra vez).
+    """
+    if emission.status != EmissionStatus.EMITIDA or not emission.cdc:
+        raise EmissionError("La factura electrónica no está emitida; no hay nada que cancelar.")
+    if emission.cancel_solicitada and not emission.cancel_error:
+        return emission
+
+    emission.cancel_solicitada = True
+    emission.cancel_motivo = motivo
+    emission.cancel_solicitada_por = usuario
+    emission.cancel_solicitada_at = datetime.utcnow()
+    emission.cancel_error = None
+    emission.updated_at = datetime.utcnow()
+    await emission.save()
+    return emission
+
+
+async def processar_cancelacion(
+    job: SifenEmission,
+    holder: str,
+    *,
+    provider_factory: Optional[Callable] = None,
+    load_creds: Optional[Callable] = None,
+) -> SifenEmission:
+    """
+    Executa UMA cancelación contra o portal. Mesmo contrato da emissão: requer o
+    lock de sessão, sempre faz logout e libera o lock no fim. Erro de rede
+    devolve o job à fila (limpa o claim); erro de negócio fica registrado em
+    `cancel_error` e não se repete sozinho.
+    """
+    provider_factory = provider_factory or get_provider
+    load_creds = load_creds or carregar_credenciais
+
+    if not await lock.adquirir(holder):
+        job.cancel_locked_by = None
+        job.cancel_locked_at = None
+        job.updated_at = datetime.utcnow()
+        await job.save()
+        return job
+
+    prov = None
+    try:
+        ruc, clave, pin = await load_creds()
+        prov = provider_factory(ruc, clave, pin)
+        prov.login()
+        prov.cancelar(job.cdc, job.cancel_motivo or "Anulación de pago")
+        job.status = EmissionStatus.CANCELADA
+        job.cancelada_at = datetime.utcnow()
+        job.cancel_error = None
+        job.cancel_locked_by = None
+        job.cancel_locked_at = None
+    except ProviderNaoInstalado:
+        job.cancel_locked_by = None   # máquina sem adapter → volta pra fila
+        job.cancel_locked_at = None
+    except Exception as e:  # noqa: BLE001 — captura ampla proposital (best-effort)
+        # Rede: some com o erro e devolve à fila (auto-retry). Negócio: registra o
+        # erro, que por si só tira o job da fila até alguém pedir de novo.
+        job.cancel_error = None if _erro_de_rede(e) else str(e)
+        job.cancel_locked_by = None
+        job.cancel_locked_at = None
+    finally:
+        if prov is not None:
+            try:
+                prov.logout()
+            except Exception:
+                pass
+        await lock.liberar(holder)
+        job.updated_at = datetime.utcnow()
+        await job.save()
+
     return job
 
 
@@ -141,7 +258,20 @@ async def processar_emissao(
         job.cdc = g["cdc"]
         job.proceso_id = g["proceso_id"]
         job.documento_id = g["documento_id"]
+        # Última janela de desistência: depois da firma o documento existe no
+        # SET e só sai por evento de cancelación. O pedido chega por outro
+        # request, então relemos a flag — e ANTES do save, senão o job em
+        # memória (que ainda tem False) apagaria o pedido.
+        atual = await SifenEmission.get_pymongo_collection().find_one(
+            {"_id": job.id}, {"abort_solicitado": 1})
+        job.abort_solicitado = bool((atual or {}).get("abort_solicitado"))
+
         await job.save()  # PROCESSANDO, com CDC (para reconciliação em caso de crash)
+
+        if job.abort_solicitado:
+            job.status = EmissionStatus.ABORTADA
+            job.error = None
+            return job
 
         if not prov.sign(g["url_proceso"]):
             raise EmissionError("firma falhou (breaker) — documento NÃO guardado")

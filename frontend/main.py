@@ -437,19 +437,25 @@ from views.products_view import ProductsView
 from views.login_view import LoginView
 from views.payments_view import PaymentsView
 from views.readings_view import ReadingsView
+from views.dashboard_view import DashboardView
 from views.profile_view import ProfileView
 from views.about_view import AboutView
 from views.settings_view import SettingsView
 from views.sponsors_view import SponsorsView
+from views.caja_view import CajaView
 
 
 class WMApp:
     """Aplicacao principal."""
 
     ROUTE_SCOPES = {
+        # A ordem importa: _first_allowed_route() devolve a primeira entrada
+        # permitida, e é pra onde cai quem tenta uma rota sem permissão.
+        "/dashboard": None,  # visível a qualquer autenticado; os cards respeitam escopo
         "/clients": "clients",
         "/readings": "readings",
         "/invoices": "invoices",
+        "/products": "invoices",
         "/payments": "payments",
         "/cutoff": "cutoff",
         "/finance": "finance",
@@ -475,7 +481,7 @@ class WMApp:
     def __init__(self, page: ft.Page):
         self.page = page
         self.current_user = None
-        self.current_route = "/clients"
+        self.current_route = "/dashboard"
         self._settings_view = None
         self._profile_view = None
         self.splash: SplashView | None = None
@@ -665,7 +671,29 @@ class WMApp:
         except Exception:
             pass
         self.splash = None
-        self._show_main_layout()
+        if self._is_caja_user():
+            self._show_caja_layout()
+        else:
+            self._show_main_layout()
+
+    def _is_caja_user(self) -> bool:
+        """Cajero dedicado: escopo 'caja' e sem acesso amplo → entra direto no Modo Caja."""
+        if not self.current_user:
+            return False
+        if self.current_user.get("role") == "master":
+            return False
+        scopes = self.current_user.get("scopes", []) or []
+        return "caja" in scopes and "*" not in scopes
+
+    def _show_caja_layout(self):
+        self.page.controls.clear()
+        self.caja_view = CajaView(
+            show_snackbar=self.show_snackbar,
+            current_user=self.current_user,
+            on_logout=self._logout,
+        )
+        self.page.add(self.caja_view)
+        self.page.update()
 
     def _user_has_scope(self, required_scope):
         if required_scope is None:
@@ -686,7 +714,7 @@ class WMApp:
         for route, scope in self.ROUTE_SCOPES.items():
             if self._user_has_scope(scope):
                 routes.append(route)
-        return routes or ["/clients"]
+        return routes or ["/dashboard"]
 
     def _first_allowed_route(self) -> str:
         return self._allowed_routes()[0]
@@ -763,9 +791,16 @@ class WMApp:
                 print(f"[WMApp] language_refresh_error err={err}")
 
     def _logout(self):
+        caja = getattr(self, "caja_view", None)
+        if caja is not None:
+            try:
+                caja.stop()
+            except Exception:
+                pass
+            self.caja_view = None
         auth_service.logout()
         self.current_user = None
-        self.current_route = "/clients"
+        self.current_route = "/dashboard"
         self._settings_view = None
         self._profile_view = None
         self._show_login(t("app.session_closed"))
@@ -779,7 +814,7 @@ class WMApp:
             return
         auth_service.logout()
         self.current_user = None
-        self.current_route = "/clients"
+        self.current_route = "/dashboard"
         self._show_login(t("app.session_expired"))
 
     def _navigate(self, route: str):
@@ -867,6 +902,11 @@ class WMApp:
 
     def _get_view(self, route: str) -> ft.Control:
         views = {
+            "/dashboard": lambda: DashboardView(
+                show_snackbar=self.show_snackbar,
+                on_navigate=self._navigate,
+                user=self.current_user,
+            ),
             "/clients": lambda: ClientsView(show_snackbar=self.show_snackbar),
             "/readings": lambda: ReadingsView(show_snackbar=self.show_snackbar),
             "/invoices": lambda: InvoicesView(show_snackbar=self.show_snackbar),

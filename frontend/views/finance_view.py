@@ -14,6 +14,7 @@ from components.sifen_emit import open_sifen_emit_modal
 from components.theme import COLORS, SPACING, create_button, create_header, create_text_field
 from services.api_client import APIError
 from utils.errors import friendly_error
+from services.caja_service import caja_service
 from services.finance_service import finance_service
 from i18n import t
 from services.pdf_generation.finance import EmployeePaymentGenerator, ExpenseReceiptGenerator, FinanceReportGenerator
@@ -112,6 +113,9 @@ class FinanceView(ft.Container):
     def _run_load_cash(self):
         self._run_with_overlay("Carregando caixa...", self._load_cash)
 
+    def _run_load_sessions(self):
+        self._run_with_overlay(t("finance.loading"), self._load_sessions)
+
     def _run_load_expenses(self, pending_only: bool = False):
         try:
             if not self.expenses_table.data:
@@ -144,8 +148,8 @@ class FinanceView(ft.Container):
             [
                 create_header(t("finance.title")),
                 ft.Container(expand=True),
-                create_button("Factura electrónica", icon=ft.Icons.RECEIPT_LONG, on_click=self._open_sifen_modal, primary=False),
-                create_button("Atualizar", icon=ft.Icons.REFRESH, on_click=lambda e: self._run_load_all(), primary=False),
+                create_button(t("sifen.electronic_invoice"), icon=ft.Icons.RECEIPT_LONG, on_click=self._open_sifen_modal, primary=False),
+                create_button(t("common.update"), icon=ft.Icons.REFRESH, on_click=lambda e: self._run_load_all(), primary=False),
             ]
         )
 
@@ -213,9 +217,25 @@ class FinanceView(ft.Container):
             show_actions=True,
         )
 
+        self.sessions_table = DataTable(
+            columns=[
+                {"key": "caja", "label": t("finance.col.session"), "min_width": 80, "flex": 1, "priority": 1, "hideable": False, "align": "center"},
+                {"key": "operador", "label": t("finance.col.operator"), "min_width": 130, "flex": 2, "priority": 1, "align": "left"},
+                {"key": "apertura_fmt", "label": t("finance.col.opened"), "min_width": 140, "flex": 2, "priority": 2, "align": "center"},
+                {"key": "cierre_fmt", "label": t("finance.col.closed"), "min_width": 140, "flex": 2, "priority": 3, "align": "center"},
+                {"key": "ingresos_fmt", "label": t("finance.col.value"), "min_width": 120, "flex": 1, "priority": 2, "align": "right"},
+                {"key": "esperado_fmt", "label": t("finance.col.expected"), "min_width": 120, "flex": 1, "priority": 3, "align": "right"},
+                {"key": "fisico_fmt", "label": t("finance.col.counted"), "min_width": 120, "flex": 1, "priority": 3, "align": "right"},
+                {"key": "diferencia_fmt", "label": t("finance.col.difference"), "min_width": 120, "flex": 1, "priority": 1, "align": "right"},
+            ],
+            data=[],
+            show_actions=False,
+        )
+
         tabs = CustomTabs(
             tabs=[
                 TabItem(t("finance.tab.cash"), self._build_cash_tab()),
+                TabItem(t("finance.tab.sessions"), self._build_sessions_tab()),
                 TabItem(t("finance.tab.expenses"), self._build_expenses_tab()),
                 TabItem(t("finance.tab.employees"), self._build_employees_tab()),
                 TabItem(t("finance.tab.payroll"), self._build_payroll_tab()),
@@ -318,9 +338,9 @@ class FinanceView(ft.Container):
 
         actions = self._build_action_bar(
             [
-                create_button("Nova Transacao", icon=ft.Icons.ADD_CARD, on_click=self._open_new_transaction_modal),
-                create_button("Imprimir Informe", icon=ft.Icons.PRINT, on_click=lambda e: self._print_finance_report(), primary=False),
-                create_button("Atualizar Caixa", icon=ft.Icons.REFRESH, on_click=lambda e: self._run_load_cash(), primary=False),
+                create_button(t("finance.new_transaction"), icon=ft.Icons.ADD_CARD, on_click=self._open_new_transaction_modal),
+                create_button(t("finance.print_report"), icon=ft.Icons.PRINT, on_click=lambda e: self._print_finance_report(), primary=False),
+                create_button(t("finance.refresh_cash"), icon=ft.Icons.REFRESH, on_click=lambda e: self._run_load_cash(), primary=False),
             ]
         )
 
@@ -338,17 +358,35 @@ class FinanceView(ft.Container):
             expand=True,
         )
 
+    def _build_sessions_tab(self) -> ft.Control:
+        actions = self._build_action_bar(
+            [
+                create_button(t("finance.refresh_sessions"), icon=ft.Icons.REFRESH,
+                              on_click=lambda e: self._run_load_sessions(), primary=False),
+                ft.Text(t("finance.sessions.hint"), size=12, color=COLORS["text_muted"]),
+            ]
+        )
+        return ft.Column(
+            [
+                ft.Container(height=SPACING["sm"]),
+                actions,
+                ft.Container(height=SPACING["sm"]),
+                self.sessions_table,
+            ],
+            expand=True,
+        )
+
     def _build_expenses_tab(self) -> ft.Control:
         actions = self._build_action_bar(
             [
-                create_button("Nova Despesa", icon=ft.Icons.RECEIPT, on_click=self._open_new_expense_modal),
+                create_button(t("finance.new_expense"), icon=ft.Icons.RECEIPT, on_click=self._open_new_expense_modal),
                 create_button(
                     "Pendentes",
                     icon=ft.Icons.HOURGLASS_TOP,
                     on_click=lambda e: self._run_load_expenses(pending_only=True),
                     primary=False,
                 ),
-                create_button("Todas", icon=ft.Icons.LIST, on_click=lambda e: self._run_load_expenses(pending_only=False), primary=False),
+                create_button(t("sponsors.filter.all_f"), icon=ft.Icons.LIST, on_click=lambda e: self._run_load_expenses(pending_only=False), primary=False),
             ]
         )
 
@@ -365,7 +403,7 @@ class FinanceView(ft.Container):
     def _build_employees_tab(self) -> ft.Control:
         actions = self._build_action_bar(
             [
-                create_button("Novo Funcionario", icon=ft.Icons.PERSON_ADD, on_click=self._open_new_employee_modal),
+                create_button(t("finance.new_employee"), icon=ft.Icons.PERSON_ADD, on_click=self._open_new_employee_modal),
             ]
         )
 
@@ -382,7 +420,7 @@ class FinanceView(ft.Container):
     def _build_payroll_tab(self) -> ft.Control:
         actions = self._build_action_bar(
             [
-                create_button("Novo Lancamento", icon=ft.Icons.REQUEST_PAGE, on_click=self._open_new_payroll_modal),
+                create_button(t("finance.new_payroll"), icon=ft.Icons.REQUEST_PAGE, on_click=self._open_new_payroll_modal),
             ]
         )
 
@@ -402,11 +440,37 @@ class FinanceView(ft.Container):
         self._loading_all = True
         try:
             self._load_cash()
+            self._load_sessions()
             self._load_expenses()
             self._load_employees()
             self._load_payroll()
         finally:
             self._loading_all = False
+
+    def _load_sessions(self):
+        """Histórico de turnos de caja (apertura/cierre + diferencia)."""
+        try:
+            sesiones = caja_service.sesiones(limit=200)
+        except APIError as err:
+            self.sessions_table.set_error(
+                t("finance.load_failed.sessions"), on_retry=self._run_load_sessions)
+            self.show_snackbar(friendly_error(err), error=True)
+            return
+
+        abierta = t("finance.session.open")
+        rows = []
+        for s in sesiones:
+            cerrada = s.get("status") == "CERRADA"
+            row = dict(s)
+            row["caja"] = s.get("numero_fmt") or str(s.get("numero", "-"))
+            row["apertura_fmt"] = format_date(s.get("fecha_apertura"), "%d/%m/%Y %H:%M")
+            row["cierre_fmt"] = format_date(s.get("fecha_cierre"), "%d/%m/%Y %H:%M") if cerrada else abierta
+            row["ingresos_fmt"] = format_currency(s.get("ingresos_total", 0), "Gs.")
+            row["esperado_fmt"] = format_currency(s.get("efectivo_esperado", 0), "Gs.") if cerrada else "—"
+            row["fisico_fmt"] = format_currency(s.get("efectivo_fisico", 0), "Gs.") if cerrada else "—"
+            row["diferencia_fmt"] = format_currency(s.get("diferencia", 0), "Gs.") if cerrada else "—"
+            rows.append(row)
+        self.sessions_table.set_data(rows)
 
     def _load_cash(self):
         try:
@@ -785,7 +849,7 @@ class FinanceView(ft.Container):
                 spacing=8,
             ),
             actions=[
-                ModalAction("Imprimir", on_click=lambda e: self._print_expense_receipt(row)),
+                ModalAction(t("invoices.btn.print"), on_click=lambda e: self._print_expense_receipt(row)),
                 ModalAction(t("common.close"), on_click=lambda e: modal.close()),
             ],
             width_pct=0.4,

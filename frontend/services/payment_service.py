@@ -28,6 +28,10 @@ class PaymentService:
         """Busca pagamento por ID."""
         return api.get(f"/payments/{payment_id}")
 
+    def anular(self, payment_id: str, motivo: str) -> dict:
+        """Estorna (anula) um pagamento — restaura faturas + estorno no caixa + auditoria."""
+        return api.post(f"/payments/{payment_id}/anular", data={"motivo": motivo})
+
     def get_by_group(self, grupo: str) -> dict:
         """Busca pagamento pelo grupo_pagamento."""
         return api.get(f"/payments/by-group/{grupo}")

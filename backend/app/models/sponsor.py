@@ -11,11 +11,13 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Optional, List
-from beanie import Document, Indexed, Link, PydanticObjectId
+from beanie import Indexed, Link, PydanticObjectId
 from pydantic import Field, BaseModel
 
 from app.models.client import Client
 from app.models.types import MongoDecimal
+
+from app.models.base import OrgDocument
 
 
 class SponsorDebtStatus(str, Enum):
@@ -25,7 +27,7 @@ class SponsorDebtStatus(str, Enum):
     PAGO = "PAGO"
 
 
-class SponsorDebt(Document):
+class SponsorDebt(OrgDocument):
     """
     Registro de divida transferida para um Sponsor.
     Cada vez que um cliente subsidiado paga, um registro deste e criado.
@@ -69,7 +71,7 @@ class SponsorDebt(Document):
         return f"SponsorDebt(valor={self.valor_subsidio}, status={self.status})"
 
 
-class SponsorInvoice(Document):
+class SponsorInvoice(OrgDocument):
     """
     Fatura agregada do Sponsor.
     Consolida todas as dividas de subsidio de um periodo.

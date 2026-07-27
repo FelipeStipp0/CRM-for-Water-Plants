@@ -235,7 +235,7 @@ class CutoffView(ft.Container):
                         ft.Row([
                             create_header(t("cutoff.title")),
                             ft.Container(expand=True),
-                            create_button("Atualizar", icon=ft.Icons.REFRESH, on_click=lambda e: self._run_refresh_all(), primary=False),
+                            create_button(t("common.update"), icon=ft.Icons.REFRESH, on_click=lambda e: self._run_refresh_all(), primary=False),
                         ]),
                         ft.Container(height=SPACING["md"]),
                         tabs,
@@ -299,9 +299,9 @@ class CutoffView(ft.Container):
         actions = self._action_bar(
             left=[self.cand_select_all],
             right=[
-                create_button("Agregar seleccionados", icon=ft.Icons.NOTIFICATIONS_ACTIVE,
+                create_button(t("cutoff.add_selected"), icon=ft.Icons.NOTIFICATIONS_ACTIVE,
                               on_click=lambda e: self._add_selected_candidates(), primary=True),
-                create_button("Atualizar", icon=ft.Icons.REFRESH, on_click=lambda e: self._run_load_candidates(), primary=False),
+                create_button(t("common.update"), icon=ft.Icons.REFRESH, on_click=lambda e: self._run_load_candidates(), primary=False),
             ],
         )
         return ft.Column(
@@ -319,7 +319,7 @@ class CutoffView(ft.Container):
         actions = self._action_bar(
             left=[self.status_dd, self.include_exited],
             right=[
-                create_button("Atualizar", icon=ft.Icons.REFRESH, on_click=lambda e: self._run_load_notices(), primary=False),
+                create_button(t("common.update"), icon=ft.Icons.REFRESH, on_click=lambda e: self._run_load_notices(), primary=False),
             ],
         )
         return ft.Column([ft.Container(height=SPACING["sm"]), actions, ft.Container(height=SPACING["sm"]), self.notices_table], expand=True)
@@ -328,8 +328,8 @@ class CutoffView(ft.Container):
         hint = self._hint_text("Avisos com prazo vencido, aguardando execução do corte.")
         actions = self._action_bar(
             right=[
-                create_button("Processar Expirados", icon=ft.Icons.SCHEDULE, on_click=self._process_expired, primary=False),
-                create_button("Atualizar", icon=ft.Icons.REFRESH, on_click=lambda e: self._run_load_ready(), primary=False),
+                create_button(t("cutoff.process_expired"), icon=ft.Icons.SCHEDULE, on_click=self._process_expired, primary=False),
+                create_button(t("common.update"), icon=ft.Icons.REFRESH, on_click=lambda e: self._run_load_ready(), primary=False),
             ],
         )
         return ft.Column(
@@ -638,7 +638,7 @@ class CutoffView(ft.Container):
 
         if status == "CORTADO":
             action_actions.append(
-                ModalAction("Solicitar Reativação", on_click=lambda e: self._reactivate_request(n, d), primary=True)
+                ModalAction(t("cutoff.request_reactivation"), on_click=lambda e: self._reactivate_request(n, d), primary=True)
             )
             if n.get("reativacao_solicitada") and not n.get("fecha_reativacao"):
                 action_actions.append(

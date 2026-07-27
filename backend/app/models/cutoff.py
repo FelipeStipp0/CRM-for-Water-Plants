@@ -13,11 +13,13 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from beanie import Document, Indexed, Link, PydanticObjectId
+from beanie import Indexed, Link, PydanticObjectId
 from pydantic import Field
 
 from app.models.client import Client
 from app.models.types import MongoDecimal
+
+from app.models.base import OrgDocument
 
 
 class CutoffStatus(str, Enum):
@@ -36,7 +38,7 @@ class CutoffActionType(str, Enum):
     CONFIRMACAO_REATIVACAO = "CONFIRMACAO_REATIVACAO"
 
 
-class CutoffNotice(Document):
+class CutoffNotice(OrgDocument):
     """
     Registro de aviso de corte e rastreamento do workflow.
 

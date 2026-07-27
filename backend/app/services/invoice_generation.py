@@ -208,6 +208,60 @@ class InvoiceGenerationService:
         )
 
     @classmethod
+    async def generate_prepaid_month(
+        cls,
+        client: Client,
+        mes: int,
+        ano: int,
+        settings: Optional[SystemSettings] = None,
+    ) -> Optional[Invoice]:
+        """
+        Gera (ou retorna a existente) a fatura minima de um mes futuro adiantado.
+
+        Valor = tarifa_base (consumo=0, sem leitura). Idempotente: se ja existe fatura
+        de CONSUMO para o periodo, devolve-a (o pagamento direcionado a incluira no alvo
+        se ainda tiver saldo). A geracao mensal pula este mes por ja existir a fatura.
+        """
+        if settings is None:
+            settings = await SystemSettings.get_instance()
+
+        existing = await Invoice.find_one(
+            {"client.$id": client.id},
+            Invoice.mes_referencia == mes,
+            Invoice.ano_referencia == ano,
+            Invoice.tipo == InvoiceType.CONSUMO,
+        )
+        if existing:
+            return existing
+
+        fecha_vencimiento = cls.calculate_due_date(
+            mes_referencia=mes,
+            ano_referencia=ano,
+            dias_vencimiento=settings.dias_vencimiento,
+            dia_geracao_faturas=settings.dia_geracao_faturas,
+        )
+        numero_factura = await Counter.get_next("invoice_number")
+        invoice = Invoice(
+            client=client,
+            tipo=InvoiceType.CONSUMO,
+            status=InvoiceStatus.PENDENTE,
+            mes_referencia=mes,
+            ano_referencia=ano,
+            fecha_vencimiento=fecha_vencimiento,
+            leitura_anterior=None,
+            leitura_actual=None,
+            consumo=0,
+            tarifa_base=settings.tarifa_base,
+            excedente=Decimal("0"),
+            valor_total=settings.tarifa_base,
+            saldo_devedor=settings.tarifa_base,
+            reading_id=None,
+            numero_factura=numero_factura,
+        )
+        await invoice.insert()
+        return invoice
+
+    @classmethod
     async def generate_minimum_invoices(
         cls,
         mes: int,

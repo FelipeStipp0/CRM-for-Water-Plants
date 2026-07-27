@@ -18,9 +18,10 @@ from app.models.reading import Reading
 from app.models.invoice import Invoice, InvoiceStatus, InvoiceType, Counter
 from app.models.payment import Payment
 from app.models.settings import SystemSettings
-from app.models.finance import CashTransaction, Expense, Employee, Payroll
+from app.models.finance import CashTransaction, Expense, Employee, Payroll, CashSession
 from app.models.sponsor import SponsorDebt, SponsorInvoice
 from app.models.cutoff import CutoffNotice
+from app.models.audit import AuditLog
 from app.models.sifen import SifenEmission, SifenSessionLock, SifenCredential, SifenCoordinator
 from app.utils.security import get_password_hash, create_access_token
 
@@ -48,9 +49,11 @@ async def test_db():
             Expense,
             Employee,
             Payroll,
+            CashSession,
             SponsorDebt,
             SponsorInvoice,
             CutoffNotice,
+            AuditLog,
             SifenEmission,
             SifenSessionLock,
             SifenCredential,

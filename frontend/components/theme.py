@@ -29,9 +29,13 @@ COLORS = {
     "accent_error": "#EF4444",
     
     # Text
+    # Rampa calibrada para WCAG AA (>=4.5:1) sobre TODAS as superfícies do app —
+    # a mais clara delas é bg_elevated (#1F4068). Contraste sobre bg_elevated:
+    # primary ~16:1, secondary ~5.8:1, muted ~4.7:1. Ao mexer aqui, recalcular:
+    # os tons antigos (#94A3B8 / #64748B) davam 4.0:1 e 2.6:1 — ilegíveis em 11-12px.
     "text_primary": "#F8FAFC",
-    "text_secondary": "#94A3B8",
-    "text_muted": "#64748B",
+    "text_secondary": "#B6C2D2",
+    "text_muted": "#A2AEC0",
     
     # Borders
     "border": "#334155",
@@ -40,7 +44,7 @@ COLORS = {
     
     # Status
     "status_active": "#10B981",
-    "status_inactive": "#6B7280",
+    "status_inactive": "#A5AEBB",
     "status_cut": "#EF4444",
 }
 

@@ -35,16 +35,17 @@ def _get_org_document_models() -> list:
     from app.models.product import Product
     from app.models.payment import Payment
     from app.models.settings import SystemSettings
-    from app.models.finance import CashTransaction, Expense, Employee, Payroll
+    from app.models.finance import CashTransaction, Expense, Employee, Payroll, CashSession
     from app.models.sponsor import SponsorDebt, SponsorInvoice
     from app.models.cutoff import CutoffNotice
+    from app.models.audit import AuditLog
     from app.models.sifen import (
         SifenEmission, SifenSessionLock, SifenCredential, SifenCoordinator,
     )
     return [
         User, Client, Reading, Invoice, Counter, Product, Payment,
         SystemSettings, CashTransaction, Expense, Employee,
-        Payroll, SponsorDebt, SponsorInvoice, CutoffNotice,
+        Payroll, CashSession, SponsorDebt, SponsorInvoice, CutoffNotice, AuditLog,
         SifenEmission, SifenSessionLock, SifenCredential, SifenCoordinator,
     ]
 
@@ -113,10 +114,16 @@ async def ensure_org_db(slug: str) -> AsyncIOMotorDatabase:
             _org_clients[slug] = AsyncIOMotorClient(conn_str)
 
         db = _org_clients[slug][f"wmapp_{slug}"]
-        await init_beanie(
-            database=db,
-            document_models=_get_org_document_models(),
-        )
+        models = _get_org_document_models()
+        await init_beanie(database=db, document_models=models)
+
+        # init_beanie deixa a coleção em estado de CLASSE — sem isto, a última
+        # org inicializada valeria para todas (junta A lendo dados da junta B).
+        # Congela os settings desta org; o roteamento por request é feito em
+        # OrgDocument.get_settings() a partir do slug do ContextVar.
+        from app.models.base import registrar_settings_da_org
+        registrar_settings_da_org(slug, models)
+
         _initialized_orgs.add(slug)
 
     return _org_clients[slug][f"wmapp_{slug}"]

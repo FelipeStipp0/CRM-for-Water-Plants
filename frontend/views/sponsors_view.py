@@ -87,7 +87,7 @@ class SponsorsView(ft.Container):
             [
                 create_header(t("sponsors.title")),
                 ft.Container(expand=True),
-                create_button("Atualizar", icon=ft.Icons.REFRESH, on_click=lambda e: self._run_load_sponsors(), primary=False),
+                create_button(t("common.update"), icon=ft.Icons.REFRESH, on_click=lambda e: self._run_load_sponsors(), primary=False),
             ]
         )
 
@@ -350,7 +350,7 @@ class SponsorsView(ft.Container):
                 self.debt_status,
                 self.debt_mes,
                 self.debt_ano,
-                create_button("Aplicar", icon=ft.Icons.FILTER_ALT, on_click=lambda e: self._run_load_sponsor_details(), primary=False),
+                create_button(t("readings.apply"), icon=ft.Icons.FILTER_ALT, on_click=lambda e: self._run_load_sponsor_details(), primary=False),
             ]
         )
 
@@ -375,8 +375,8 @@ class SponsorsView(ft.Container):
         actions = self._build_action_bar(
             [
                 self.invoice_status,
-                create_button("Filtrar", icon=ft.Icons.FILTER_ALT, on_click=lambda e: self._run_load_sponsor_details(), primary=False),
-                create_button("Gerar Fatura Mensal", icon=ft.Icons.POST_ADD, on_click=self._generate_invoice_modal),
+                create_button(t("common.filter"), icon=ft.Icons.FILTER_ALT, on_click=lambda e: self._run_load_sponsor_details(), primary=False),
+                create_button(t("sponsors.generate_monthly_invoice"), icon=ft.Icons.POST_ADD, on_click=self._generate_invoice_modal),
             ]
         )
 

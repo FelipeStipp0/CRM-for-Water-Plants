@@ -180,12 +180,16 @@ def draw_company_header_p80(
     y: float,
     title: str,
     company: dict[str, Any] | None,
+    meta_color=None,
 ) -> float:
     """
     Compact header for 80mm thermal paper.
     Company name is centered and wraps across multiple lines — never truncated.
     RUC and phone centered below. Title centered. Separator rule at end.
     Returns y below the separator.
+
+    `meta_color` sobrescreve a cor do RUC/Tel (o recibo pede tudo preto, para
+    aguentar papel térmico gasto; os demais P80 seguem no cinza padrão).
     """
     GAP  = PdfStyles.GAP - 1 * mm
     info = normalize_company(company)
@@ -202,7 +206,7 @@ def draw_company_header_p80(
         y -= GAP
 
     c.setFont(*PdfStyles.P80_FONT_BODY)
-    c.setFillColor(PdfColors.GRAY)
+    c.setFillColor(meta_color or PdfColors.GRAY)
     c.drawCentredString(cx, y, f"RUC: {info['ruc']}")
     y -= GAP - 1 * mm
     c.drawCentredString(cx, y, f"Tel: {info['phone']}")

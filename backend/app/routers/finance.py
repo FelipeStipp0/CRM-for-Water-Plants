@@ -51,6 +51,10 @@ from app.schemas.finance import (
 router = APIRouter(dependencies=[Depends(require_scopes("finance"))])
 
 
+# Apertura/cierre de caja moram em `routers/caja.py` — o cajero precisa deles e
+# nao tem o escopo "finance" deste router.
+
+
 # ============ Cash Transactions ============
 
 def transaction_to_response(t: CashTransaction) -> CashTransactionResponse:

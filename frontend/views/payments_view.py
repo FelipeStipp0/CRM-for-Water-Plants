@@ -3,6 +3,7 @@ WMApp Frontend - Payments View
 Tela de caixa para recebimento e historico de pagamentos.
 """
 
+import threading
 from datetime import datetime
 
 import flet as ft
@@ -21,7 +22,7 @@ from components.theme import (
     create_text_field,
     get_status_color,
 )
-from config.local_settings import get_api_url, get_invoice_print_format
+from config.local_settings import get_api_url
 from services.api_client import APIError
 from utils.errors import friendly_error
 from services.client_service import client_service
@@ -29,7 +30,6 @@ from services.cutoff_service import cutoff_service
 from services.invoice_service import invoice_service
 from services.payment_service import payment_service
 from i18n import t
-from services.pdf_generation.invoices import InvoiceA4Generator, InvoiceP80Generator
 from services.pdf_generation.notifications import ReactivationRequestGenerator
 from services.pdf_generation.printer_manager import printer_manager
 from services.pdf_generation.receipts import PaymentReceiptP80Generator
@@ -51,8 +51,6 @@ class PaymentsView(ft.Container):
         self._company_cache: dict | None = None
         self.last_payment_result = None
         self.receipt_generator = PaymentReceiptP80Generator()
-        self.invoice_generator = InvoiceA4Generator()
-        self.invoice_p80_generator = InvoiceP80Generator()
         self.reactivation_generator = ReactivationRequestGenerator()
 
         self._build()
@@ -87,8 +85,8 @@ class PaymentsView(ft.Container):
             [
                 create_header(t("payments.title")),
                 ft.Container(expand=True),
-                create_button("Novo Recebimento", icon=ft.Icons.POINT_OF_SALE, on_click=self._open_new_payment_modal),
-                create_button("Atualizar", icon=ft.Icons.REFRESH, on_click=lambda e: (self.pagination.reset(), self._run_load_payments(skip=0)), primary=False),
+                create_button(t("payments.new"), icon=ft.Icons.POINT_OF_SALE, on_click=self._open_new_payment_modal),
+                create_button(t("common.update"), icon=ft.Icons.REFRESH, on_click=lambda e: (self.pagination.reset(), self._run_load_payments(skip=0)), primary=False),
             ]
         )
 
@@ -279,7 +277,7 @@ class PaymentsView(ft.Container):
         # ---------- SECCIÓN 1 — Buscar cliente ----------
         invoice_number_field = create_text_field(t("payments.field.invoice_number"), width=200)
         invoice_search_hint = ft.Text("", color=COLORS["text_muted"], size=12, visible=False)
-        client_search = create_text_field(t("payments.field.client_search"), width=420)
+        client_search = create_text_field(t("payments.field.client_search"), width=420, autofocus=True)
         search_hint = ft.Text(t("payments.search_hint"),
                               color=COLORS["text_muted"], size=12)
         search_results = ft.Column(spacing=6, scroll=ft.ScrollMode.AUTO, height=150)
@@ -344,26 +342,11 @@ class PaymentsView(ft.Container):
         )
         error_text = ft.Text("", color=COLORS["accent_error"], visible=False)
 
-        preview_total = ft.Text("Gs. 0", size=FONTS["size_lg"], weight=ft.FontWeight.BOLD, color=COLORS["text_primary"])
-        preview_lines = ft.Column([], spacing=2)
-        preview_panel = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Text(t("payments.preview.title"), size=11, weight=ft.FontWeight.W_600, color=COLORS["text_muted"]),
-                    preview_lines,
-                ],
-                spacing=6,
-            ),
-            padding=SPACING["md"], bgcolor=COLORS["bg_elevated"],
-            border=ft.Border.all(1, COLORS["border"]), border_radius=10,
-        )
-
         section3_body = ft.Column(
             [
                 ft.Row([method_dd, amount_field], spacing=SPACING["sm"], wrap=True),
                 ft.Row([receiver_field], spacing=SPACING["sm"]),
                 obs_field,
-                preview_panel,
                 error_text,
             ],
             spacing=SPACING["sm"],
@@ -381,48 +364,6 @@ class PaymentsView(ft.Container):
             except ValueError:
                 return None
 
-        def update_preview(ev=None):
-            amount = _parse_amount(amount_field.value)
-            debt = state["debt"]
-            taxa = state["taxa"] if state["cortado"] else 0.0
-            lines: list[ft.Control] = []
-
-            def line(lbl, val, *, strong=False, color=None, sign=""):
-                return ft.Row(
-                    [
-                        ft.Text(lbl, size=12, color=color or COLORS["text_secondary"],
-                                weight=ft.FontWeight.BOLD if strong else ft.FontWeight.NORMAL),
-                        ft.Container(expand=True),
-                        ft.Text(f"{sign}{self._money(val)}", size=12, color=color or COLORS["text_primary"],
-                                weight=ft.FontWeight.BOLD if strong else ft.FontWeight.NORMAL),
-                    ],
-                )
-
-            lines.append(line(t("payments.preview.debt"), debt))
-            if state["cortado"]:
-                lines.append(line(t("payments.preview.reactivation"), taxa, color=COLORS["accent_warning"]))
-            total_cobrar = debt + taxa
-            lines.append(ft.Divider(height=1, color=COLORS["border"]))
-            lines.append(line(t("payments.preview.total"), total_cobrar, strong=True))
-
-            if amount is not None:
-                lines.append(ft.Container(height=4))
-                lines.append(line(t("payments.preview.received"), amount, color=COLORS["accent_secondary"]))
-                aplicado = min(amount, debt)
-                restante = max(0.0, debt - amount)
-                vuelto = max(0.0, amount - debt)
-                lines.append(line(t("payments.preview.applied"), aplicado))
-                if restante > 0:
-                    lines.append(line(t("payments.preview.remaining"), restante, color=COLORS["accent_warning"]))
-                else:
-                    lines.append(line(t("payments.preview.remaining_zero"), 0, color=COLORS["accent_success"]))
-                if vuelto > 0:
-                    lines.append(line(t("payments.preview.change"), vuelto, color=COLORS["text_secondary"]))
-            preview_lines.controls = lines
-            _u(preview_lines)
-
-        amount_field.on_change = update_preview
-
         def _show_client_sections():
             section2.visible = True
             section3.visible = True
@@ -433,14 +374,13 @@ class PaymentsView(ft.Container):
             client_id = selected["id"]
             if not client_id:
                 return
-            # status / dados do cliente
-            selected_client = selected["data"] or {}
-            if not selected_client:
-                try:
-                    selected_client = client_service.get(client_id)
-                    selected["data"] = selected_client
-                except APIError:
-                    selected_client = {}
+            # contexto do cobro numa única chamada (cliente + saldo + faturas + taxa)
+            try:
+                ctx = client_service.get_payment_context(client_id)
+            except APIError:
+                ctx = {}
+            selected_client = ctx.get("client") or selected["data"] or {}
+            selected["data"] = selected_client
             status = selected_client.get("status", "-")
             client_name_text.value = selected_client.get("nombre_completo", t("payments.client_default"))
             chip = self._status_chip(status)
@@ -460,14 +400,9 @@ class PaymentsView(ft.Container):
             _u(client_status_chip)
             _u(client_sub_text)
 
-            # saldo pendente
-            try:
-                debt = client_service.get_pending_balance(client_id)
-                state["debt"] = float(debt.get("saldo_pendiente", 0) or 0)
-                state["facturas"] = int(debt.get("facturas_pendientes", 0) or 0)
-            except APIError:
-                state["debt"] = 0.0
-                state["facturas"] = 0
+            # saldo pendente (do contexto)
+            state["debt"] = float(ctx.get("saldo_pendiente", 0) or 0)
+            state["facturas"] = int(ctx.get("facturas_pendientes", 0) or 0)
             debt_value_text.value = self._money(state["debt"])
             debt_count_text.value = t("payments.debt_count", count=state['facturas'])
             _u(debt_value_text)
@@ -476,7 +411,7 @@ class PaymentsView(ft.Container):
             # taxa de reativação (das configurações) — sempre exibida se CORTADO
             if state["cortado"]:
                 try:
-                    state["taxa"] = float((self._get_company_info() or {}).get("taxa_reativacao", 0) or 0)
+                    state["taxa"] = float(ctx.get("taxa_reativacao", 0) or 0)
                 except Exception:
                     state["taxa"] = 0.0
                 total_reactiv = state["debt"] + state["taxa"]
@@ -511,10 +446,9 @@ class PaymentsView(ft.Container):
                 cut_warning.visible = False
             _u(cut_warning)
 
-            # faturas pendentes (detalhe)
+            # faturas pendentes (detalhe, do contexto)
             try:
-                invoices = invoice_service.list_by_client(client_id, limit=100)
-                pending = [inv for inv in invoices if inv.get("status") in {"PENDENTE", "PARCIAL"}]
+                pending = ctx.get("facturas", [])
                 rows: list[ft.Control] = []
                 for inv in pending[:30]:
                     numero = inv.get("numero_factura") or inv.get("numero_fatura") or "-"
@@ -560,7 +494,6 @@ class PaymentsView(ft.Container):
                 amount_field.value = f"{int(round(state['debt']))}" if state["debt"] else ""
                 _u(amount_field)
             _show_client_sections()
-            update_preview()
 
         def render_search_results():
             controls: list[ft.Control] = []
@@ -654,9 +587,25 @@ class PaymentsView(ft.Container):
                 search_hint.value = t("payments.search_hint")
                 _u(search_hint)
 
+        # Busca ao vivo: dispara sozinha ~350ms após parar de digitar (>=2 chars).
+        _search_timer: dict = {"t": None}
+
+        def _debounced_search(ev=None):
+            q = (client_search.value or "").strip()
+            if _search_timer["t"] is not None:
+                _search_timer["t"].cancel()
+            if len(q) < 2:
+                result_clients.clear()
+                render_search_results()
+                return
+            _search_timer["t"] = threading.Timer(0.35, lambda: _bg(run_search))
+            _search_timer["t"].start()
+
+        client_search.on_change = _debounced_search
         client_search.on_submit = lambda e: _bg(run_search)
 
         def save_payment(ev):
+            # (definida abaixo; on_submit do monto é ligado após a definição)
             if not selected["id"]:
                 error_text.value = t("payments.err.select_client")
                 error_text.visible = True
@@ -690,28 +639,51 @@ class PaymentsView(ft.Container):
                 error_text.visible = True
                 _u(error_text)
 
-        section1_body = ft.Column(
+        # Enter no monto confirma o cobro (sem precisar alcançar o botão).
+        amount_field.on_submit = save_payment
+
+        # Bloco "por número de factura" — recolhido por padrão (caso raro).
+        invoice_block = ft.Column(
             [
-                ft.Text("Por número de factura", size=11, weight=ft.FontWeight.W_600, color=COLORS["text_muted"]),
                 ft.Row(
                     [
                         invoice_number_field,
-                        create_button("Buscar factura", icon=ft.Icons.RECEIPT_LONG, on_click=lambda e: _bg(search_by_invoice_number), primary=False),
+                        create_button(t("payments.search_invoice"), icon=ft.Icons.RECEIPT_LONG, on_click=lambda e: _bg(search_by_invoice_number), primary=False),
                     ],
                     spacing=SPACING["sm"],
                 ),
                 invoice_search_hint,
-                ft.Container(height=2),
-                ft.Text("O por cliente", size=11, weight=ft.FontWeight.W_600, color=COLORS["text_muted"]),
+            ],
+            spacing=SPACING["sm"],
+            visible=False,
+        )
+
+        def _toggle_invoice_block(ev):
+            invoice_block.visible = not invoice_block.visible
+            _u(invoice_block)
+
+        invoice_toggle = ft.TextButton(
+            content=ft.Row(
+                [ft.Icon(ft.Icons.RECEIPT_LONG, size=15), ft.Text(t("payments.search_invoice"))],
+                spacing=6, tight=True,
+            ),
+            on_click=_toggle_invoice_block,
+        )
+
+        section1_body = ft.Column(
+            [
                 ft.Row(
                     [
                         client_search,
-                        create_button("Buscar", icon=ft.Icons.SEARCH, on_click=lambda e: _bg(run_search), primary=False),
+                        create_button(t("common.search"), icon=ft.Icons.SEARCH, on_click=lambda e: _bg(run_search), primary=False),
                     ],
                     spacing=SPACING["sm"],
                 ),
                 search_hint,
                 search_results,
+                ft.Divider(height=1, color=COLORS["border_subtle"]),
+                invoice_toggle,
+                invoice_block,
             ],
             spacing=SPACING["sm"],
         )
@@ -821,36 +793,6 @@ class PaymentsView(ft.Container):
         )
         modal.open()
 
-    def _build_invoice_payload_for_print(self, invoice_details: dict, payment_result: dict) -> dict:
-        client_payload = {
-            "name": payment_result.get("client_name", "-"),
-            "ci_ruc": payment_result.get("client_ci_ruc", "-"),
-            "address": "-",
-            "meter": "-",
-            "manzana": "-",
-            "lote": "-",
-        }
-        client_id = invoice_details.get("client_id")
-        if client_id:
-            try:
-                from services.client_service import client_service
-                client = client_service.get(client_id)
-                client_payload = {
-                    "name": client.get("nombre_completo", client_payload["name"]),
-                    "ci_ruc": client.get("ci_ruc", client_payload["ci_ruc"]),
-                    "address": client.get("direccion", "-"),
-                    "meter": client.get("numero_medidor", "-"),
-                    "manzana": client.get("manzana", "-"),
-                    "lote": client.get("lote", "-"),
-                }
-            except Exception:
-                pass
-        return {
-            "invoice": invoice_details,
-            "client": client_payload,
-            "company": self._get_company_info(),
-        }
-
     def _get_company_info(self) -> dict:
         if self._company_cache is not None:
             return self._company_cache
@@ -892,6 +834,11 @@ class PaymentsView(ft.Container):
         printer_manager.print_pdf(pdf, printer_type="a4", job_name=f"reactivation_{str(notice_id)[:12]}")
 
     def _print_payment_documents(self, result: dict):
+        """Recibo único do cobro — não sai uma via de fatura por mês pago.
+
+        O recibo já lista as facturas afectadas e diz no rodapé que comprova o
+        pagamento delas, então imprimir a fatura de cada mês só gasta papel.
+        """
         printed_count = 0
         errors = []
         company = self._get_company_info()
@@ -916,31 +863,6 @@ class PaymentsView(ft.Container):
             except Exception as exc:
                 print(f"[Payments] print_reactivation_failed err={exc}")
                 errors.append("la orden de reactivación")
-
-        affected = result.get("invoices_affected", []) or []
-        # Formato escolhido pelo usuário: P80 (térmica, padrão) ou A4.
-        fmt = get_invoice_print_format()
-        if fmt == "a4":
-            inv_gen, inv_printer = self.invoice_generator, "a4"
-        else:
-            inv_gen, inv_printer = self.invoice_p80_generator, "thermal"
-        printed_invoices = set()
-        for allocation in affected:
-            invoice_id = allocation.get("invoice_id")
-            if not invoice_id or invoice_id in printed_invoices:
-                continue
-            printed_invoices.add(invoice_id)
-            try:
-                details = invoice_service.get_with_balance(invoice_id)
-                payload = self._build_invoice_payload_for_print(details, result)
-                invoice_pdf = inv_gen.generate(payload)
-                # Cada fatura é um job separado para a impressora cortar entre elas.
-                printer_manager.print_pdf(invoice_pdf, printer_type=inv_printer, job_name=f"invoice_{invoice_id[:8]}")
-                printed_count += 1
-            except Exception as exc:
-                period = f"{allocation.get('mes_referencia', 0):02d}/{allocation.get('ano_referencia', '-')}"
-                print(f"[Payments] print_invoice_failed period={period} err={exc}")
-                errors.append(t("payments.print.invoice_label", period=period))
 
         if errors:
             details = ", ".join(errors[:3])
@@ -993,7 +915,76 @@ class PaymentsView(ft.Container):
                 ],
                 spacing=8,
             ),
-            actions=[ModalAction(t("common.close"), on_click=lambda e: modal.close())],
+            actions=[
+                ModalAction("Anular pago", danger=True,
+                            on_click=lambda e: self._open_anular_prompt(row["id"], recibo_txt, modal)),
+                ModalAction(t("common.close"), on_click=lambda e: modal.close()),
+            ],
             width_pct=0.4,
         )
         modal.open()
+
+    def _open_anular_prompt(self, payment_id: str, recibo_txt: str, parent_modal):
+        motivo_field = create_text_field(
+            "Motivo de la anulación", multiline=True, min_lines=2, max_lines=3, width=None)
+        err = ft.Text("", color=COLORS["accent_error"], size=12, visible=False)
+
+        def _confirm(e):
+            motivo = (motivo_field.value or "").strip()
+            if len(motivo) < 3:
+                err.value = "Indicá el motivo (mín. 3 caracteres)."
+                err.visible = True
+                err.update()
+                return
+            prompt.close()
+
+            def work():
+                try:
+                    result = payment_service.anular(payment_id, motivo)
+                except APIError as ex:
+                    self.show_snackbar(friendly_error(ex), error=True)
+                    return
+                try:
+                    parent_modal.close()
+                except Exception:
+                    pass
+                self._run_load_payments()
+
+                # Factura electrónica: a cancelación no SET é assíncrona (quem a
+                # executa é el coordinador), então o aviso não promete o que
+                # ainda não aconteceu.
+                sifen = (result or {}).get("sifen")
+                if not sifen:
+                    self.show_snackbar(f"✓ Recibo {recibo_txt} anulado")
+                elif sifen.get("cancelacion") == "solicitada":
+                    self.show_snackbar(
+                        f"✓ Recibo {recibo_txt} anulado — cancelación de la factura "
+                        "electrónica solicitada.")
+                else:
+                    self.show_snackbar(
+                        f"Recibo {recibo_txt} anulado, pero la cancelación de la factura "
+                        "electrónica falló — revisala en Facturación.", error=True)
+
+            if self.page:
+                self.page.run_thread(work)
+            else:
+                work()
+
+        prompt = AppModal(
+            page=self.page,
+            title=f"Anular recibo {recibo_txt}",
+            content=ft.Column(
+                [
+                    ft.Text("Se restauran las facturas cobradas y se registra un estorno en caja. "
+                            "Queda constancia en auditoría.", size=13, color=COLORS["text_secondary"]),
+                    motivo_field, err,
+                ],
+                spacing=12, tight=True,
+            ),
+            actions=[
+                ModalAction(t("common.cancel"), on_click=lambda e: prompt.close()),
+                ModalAction("Anular", danger=True, on_click=_confirm),
+            ],
+            width_pct=0.4,
+        )
+        prompt.open()
