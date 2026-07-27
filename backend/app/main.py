@@ -128,11 +128,12 @@ def create_app() -> FastAPI:
     app.add_middleware(GZipMiddleware, minimum_size=1024)
 
     # Registrar routers
-    from app.routers import auth, clients, readings, invoices, payments, settings as settings_router, finance, sponsors, cutoff, upload, map_tiles, sifen, products, audit, caja
+    from app.routers import auth, clients, titulares, readings, invoices, payments, settings as settings_router, finance, sponsors, cutoff, upload, map_tiles, sifen, products, audit, caja
     from app.whatsapp.router import router as whatsapp_router
 
     app.include_router(auth.router, prefix="/auth", tags=["Autenticacao"])
     app.include_router(clients.router, prefix="/clients", tags=["Clientes"])
+    app.include_router(titulares.router, prefix="/titulares", tags=["Titulares"])
     app.include_router(readings.router, prefix="/readings", tags=["Leituras"])
     # print_router antes do router: rota mais específica primeiro, e ele afrouxa
     # o escopo só para a leitura que a impressão do ticket precisa.

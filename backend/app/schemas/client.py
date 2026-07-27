@@ -72,6 +72,8 @@ class ClientResponse(BaseModel):
     numero_medidor: str
     categoria: ClientCategory
     status: ClientStatus
+    # Titular (dono da ligacao) — permite achar as outras casas da mesma pessoa
+    titular_id: Optional[str] = None
     # Sponsor
     is_sponsor: bool = False
     # Subsidio / Aluguel (cliente com pagador externo)

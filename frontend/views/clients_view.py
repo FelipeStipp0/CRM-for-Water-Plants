@@ -12,6 +12,7 @@ from components.loading_overlay import LoadingOverlay
 from components.pagination import Pagination
 from components.search_bar import SearchBar
 from components.app_modal import AppModal, ModalAction
+from components.residencias import bloco_conexiones
 from components.theme import (
     COLORS,
     FONTS,
@@ -875,6 +876,9 @@ class ClientsView(ft.Container):
                 [
                     ft.Row([ft.Container(expand=True), close_btn]),
                     info,
+                    ft.Divider(color=COLORS["border"]),
+                    bloco_conexiones(self.page, client, self.show_snackbar,
+                                     on_change=lambda: self._run_load_clients()),
                     ft.Divider(color=COLORS["border"]),
                     tabs,
                 ],

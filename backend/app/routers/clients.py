@@ -39,6 +39,7 @@ def client_to_response(client: Client) -> ClientResponse:
         numero_medidor=client.numero_medidor,
         categoria=client.categoria,
         status=client.status,
+        titular_id=str(client.titular_id) if client.titular_id else None,
         is_sponsor=client.is_sponsor,
         sponsor_id=str(client.sponsor_id) if client.sponsor_id else None,
         subsidio_porcentagem=client.subsidio_porcentagem,
