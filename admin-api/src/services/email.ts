@@ -93,6 +93,21 @@ function button(href: string, label: string): string {
   </tr></table>`;
 }
 
+/**
+ * Codifica o assunto como um único encoded-word RFC 2047, se houver não-ASCII.
+ *
+ * Cabeçalho de email é ASCII. Deixar "Paraná" cru ao lado de um encoded-word
+ * gerado pelo provedor (o travessão virava `=?UTF-8?Q?=E2=80=94?=`) produz um
+ * header inválido: o cliente desiste de decodificar e mostra o token literal,
+ * com os acentos quebrados. Codificando o assunto inteiro de uma vez, o header
+ * é sempre válido e qualquer cliente o decodifica.
+ */
+function encodeSubject(subject: string): string {
+  // eslint-disable-next-line no-control-regex
+  if (!/[^\x00-\x7F]/.test(subject)) return subject;
+  return `=?UTF-8?B?${Buffer.from(subject, "utf8").toString("base64")}?=`;
+}
+
 async function sendEmail(opts: {
   to: string;
   subject: string;
@@ -103,12 +118,12 @@ async function sendEmail(opts: {
     method: "POST",
     headers: {
       Authorization: `Basic ${auth}`,
-      "Content-Type": "application/json",
+      "Content-Type": "application/json; charset=utf-8",
     },
     body: JSON.stringify({
       from: FROM,
       to: opts.to,
-      subject: opts.subject,
+      subject: encodeSubject(opts.subject),
       html: opts.html,
     }),
   });
