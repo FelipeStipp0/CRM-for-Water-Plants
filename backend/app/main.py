@@ -54,12 +54,15 @@ async def _ruc_cron():
     """
     Mantém o padrón RUC do DNIT em dia (publicação mensal, dia incerto).
 
+    Lê o pacote publicado no R2, NÃO o portal do DNIT: daqui o DNIT é
+    inalcançável (DNS resolve, TCP expira em 443 e 80). Quem baixa do DNIT e
+    publica no R2 é `publicar_no_r2`, rodando de uma rede que o alcança.
+
     Verifica todo dia às 04:00 em vez de "todo dia 1": o DNIT publica quando
-    publica (a última saiu dia 2). A checagem é barata — 10 HEADs — e só baixa
-    de fato quando o Last-Modified muda, então rodar diariamente não custa nada.
+    publica (a última saiu dia 2). Sem pacote novo, sai na comparação de meta.
     """
     from datetime import datetime, timedelta
-    from app.services.ruc_registry import sincronizar
+    from app.services.ruc_registry import sincronizar_do_r2 as sincronizar
     while True:
         now = datetime.now()
         next_run = now.replace(hour=4, minute=0, second=0, microsecond=0)

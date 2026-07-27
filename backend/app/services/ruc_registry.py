@@ -18,7 +18,7 @@ Três cuidados que o import manual não tinha:
    sincronização; sem publicação nova, o job sai em ~10 requisições HEAD.
 """
 
-import gzip  # noqa: F401  (mantém o módulo disponível p/ chamadas externas)
+import gzip
 import io
 import logging
 import zipfile
@@ -97,7 +97,127 @@ async def _versao_anterior() -> dict:
     return doc or {}
 
 
-# --------------------------------------------------------------- sincronização
+# --------------------------------------------------------------- espelho no R2
+# O portal do DNIT não é alcançável de todo lugar: do datacenter onde a API roda,
+# a conexão simplesmente expira (DNS resolve, TCP não fecha, em 443 e em 80). Quem
+# alcança o DNIT não é quem alcança bem o Mongo, e vice-versa. O R2 é alcançável
+# dos dois lados, então ele vira o ponto de encontro:
+#
+#   publicar_no_r2()      roda onde o DNIT responde  → baixa, parseia, sobe o pacote
+#   sincronizar_do_r2()   roda no cron da API        → lê o pacote e troca a coleção
+#
+# A parte cara (2 milhões de inserts) fica na rede privada, onde funciona.
+R2_KEY = "ruc/padron-latest.json.gz"
+R2_META_KEY = "ruc/padron-latest.meta.json"
+
+
+async def _baixar_e_parsear() -> tuple[list[dict], int]:
+    """Baixa os 10 zips do DNIT e devolve (registros, malformados)."""
+    registros: list[dict] = []
+    malformados = 0
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as cli:
+        for nome in ARQUIVOS:
+            resp = await cli.get(f"{BASE_URL}/{nome}")
+            resp.raise_for_status()
+            for linha in linhas_do_zip(resp.content):
+                reg = parse_linha(linha)
+                if reg is None:
+                    malformados += 1
+                    continue
+                registros.append(reg)
+            logger.info("[ruc] %s processado — acumulado %s", nome, f"{len(registros):,}")
+    return registros, malformados
+
+
+async def publicar_no_r2(forcar: bool = False) -> dict:
+    """
+    Baixa o padrón do DNIT e publica o pacote no R2. Roda onde o DNIT responde.
+
+    Não toca no banco: quem aplica é `sincronizar_do_r2`.
+    """
+    import json
+
+    from app.utils.r2 import r2_get, r2_put
+
+    marcas = await _last_modified()
+    if not any(marcas.values()):
+        return {"status": "erro", "error": "DNIT inalcancavel deste host"}
+
+    if not forcar:
+        try:
+            atual = json.loads(r2_get(R2_META_KEY))
+            if atual.get("last_modified") == marcas:
+                return {"status": "sem_mudanca", "total": atual.get("total", 0)}
+        except Exception:  # noqa: BLE001 — sem meta publicada ainda
+            pass
+
+    registros, malformados = await _baixar_e_parsear()
+    if not registros:
+        return {"status": "erro", "error": "padron vazio"}
+
+    pacote = gzip.compress(json.dumps(registros).encode())
+    r2_put(R2_KEY, pacote, "application/gzip")
+    r2_put(R2_META_KEY, json.dumps({
+        "last_modified": marcas, "total": len(registros),
+        "malformados": malformados,
+        "publicado_em": datetime.utcnow().isoformat() + "Z",
+    }).encode(), "application/json")
+
+    return {"status": "ok", "total": len(registros), "malformados": malformados,
+            "bytes": len(pacote), "key": R2_KEY}
+
+
+async def sincronizar_do_r2(forcar: bool = False) -> dict:
+    """
+    Aplica no banco o pacote publicado no R2. É o que o cron roda.
+
+    Mesmas travas da carga direta: troca atômica no fim e recusa de padrón
+    suspeitosamente menor que o anterior.
+    """
+    import json
+
+    from app.utils.r2 import r2_get
+
+    inicio = datetime.utcnow()
+    try:
+        meta = json.loads(r2_get(R2_META_KEY))
+    except Exception as e:  # noqa: BLE001
+        return {"status": "erro", "error": f"pacote nao publicado no R2: {e}"}
+
+    anterior = await _versao_anterior()
+    if not forcar and meta.get("last_modified") == anterior.get("last_modified"):
+        return {"status": "sem_mudanca", "verificado_em": inicio,
+                "total": anterior.get("total", 0)}
+
+    registros = json.loads(gzip.decompress(r2_get(R2_KEY)))
+    total = len(registros)
+
+    esperado = anterior.get("total", 0)
+    if esperado and total < esperado * 0.9:
+        return {"status": "suspeito", "total": total, "anterior": esperado}
+
+    db = get_ruc_db()
+    tmp = db[TMP_COLLECTION]
+    await tmp.drop()
+    for i in range(0, total, BATCH):
+        await tmp.insert_many(registros[i:i + BATCH], ordered=False)
+
+    await tmp.create_index("ruc", unique=True)
+    await db[TMP_COLLECTION].rename(COLLECTION, dropTarget=True)
+
+    await db[META_COLLECTION].update_one(
+        {"_id": "ultima"},
+        {"$set": {"last_modified": meta.get("last_modified"), "total": total,
+                  "malformados": meta.get("malformados"),
+                  "origem": "r2", "sincronizado_em": datetime.utcnow(),
+                  "duracao_s": (datetime.utcnow() - inicio).total_seconds()}},
+        upsert=True,
+    )
+    logger.info("[ruc] padrón aplicado do R2: %s registros", f"{total:,}")
+    return {"status": "ok", "total": total}
+
+
+# --------------------------------------------------------------- carga direta
 async def sincronizar(forcar: bool = False) -> dict:
     """
     Baixa o padrón, carrega em coleção temporária e troca atomicamente.

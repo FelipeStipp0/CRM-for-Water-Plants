@@ -48,6 +48,16 @@ async def _main(args) -> int:
         if args.status:
             print(await ruc_registry.status())
             return 0
+        if args.publicar:
+            print("Baixando do DNIT e publicando o pacote no R2...")
+            r = await ruc_registry.publicar_no_r2(forcar=args.forcar)
+            print(r)
+            return 0 if r.get("status") in ("ok", "sem_mudanca") else 1
+        if args.do_r2:
+            print("Aplicando no banco o pacote publicado no R2...")
+            r = await ruc_registry.sincronizar_do_r2(forcar=args.forcar)
+            print(r)
+            return 0 if r.get("status") in ("ok", "sem_mudanca") else 1
         print("Sincronizando o padron RUC (pode levar alguns minutos)...")
         r = await ruc_registry.sincronizar(forcar=args.forcar)
         print(r)
@@ -64,4 +74,8 @@ if __name__ == "__main__":
                    help="mostra o estado da ultima sincronizacao")
     p.add_argument("--public-host", metavar="HOST:PORT",
                    help="troca o host da URL (proxy TCP publico do Railway)")
+    p.add_argument("--publicar", action="store_true",
+                   help="baixa do DNIT e publica o pacote no R2 (rode onde o DNIT responde)")
+    p.add_argument("--do-r2", action="store_true",
+                   help="aplica no banco o pacote do R2 (e o que o cron faz)")
     sys.exit(asyncio.run(_main(p.parse_args())))
