@@ -9,4 +9,11 @@ pywin32>=306
 openpyxl>=3.1.0
 pypdfium2>=4.30.0
 
+# Usadas em runtime e antes NAO declaradas: vinham de carona nas dependencias
+# opcionais que o .spec seguia por engano. Sem elas o app empacotado abre a
+# janela e quebra calado (build windowed nao tem stdout).
+python-dotenv>=1.0      # config/local_settings.py, no import do app
+qrcode>=7.4             # QR do KuDE (services/pdf_generation/kude.py)
+requests>=2.31          # adapter SIFEN (services/sifen_adapter/adapter.py)
+
 lxml>=5.0
