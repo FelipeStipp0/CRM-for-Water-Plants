@@ -1,89 +1,67 @@
 """
-Importa o registro de RUC (arquivos DNIT `ruc*.txt`) para `wmapp_admin.ruc_registry`.
+Sincroniza o padrón RUC do DNIT sob demanda (o normal é o cron diário fazer isso).
 
-Formato de cada linha (pipe, UTF-8):  RUC|Nombre|DV|código|Estado|
-Guardamos {ruc, nombre, dv, estado}. Store nacional (compartilhado entre orgs).
+Baixa direto do portal do DNIT, carrega em coleção temporária e troca atomicamente
+— a lógica toda vive em `app/services/ruc_registry.py`, para não existirem dois
+parsers divergentes. Antes este script tinha o seu próprio, que quebrava nas linhas
+com `|` dentro do nome e gravava o código de equivalencia como estado.
 
-Estratégia: drop + insert_many em lotes (rápido p/ ~2M linhas) e recria o índice
-único em `ruc` no final. Fase B vai versionar isso como "pacote MM/YYYY"; aqui é o
-import direto dos arquivos atuais.
+Uso (a partir de `backend/`):
 
-Uso:
-    python scripts/import_ruc.py [diretorio_dos_ruc_txt]
-
-Default do diretório: env RUC_DIR ou a pasta conhecida em Downloads.
-Mongo: env MONGODB_URL ou mongodb://127.0.0.1:27017
+    python -m scripts.import_ruc            # sincroniza se houver publicação nova
+    python -m scripts.import_ruc --forcar   # reimporta mesmo sem mudança
+    python -m scripts.import_ruc --status   # só mostra o estado atual
 """
-import glob
+
+import argparse
+import asyncio
 import os
+import re
 import sys
-import time
 
-import pymongo
-
-DEFAULT_DIR = r"C:/Users/stipp/Downloads/Faturamento ARQ/data/ruc"
-BATCH = 50_000
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def main():
-    ruc_dir = sys.argv[1] if len(sys.argv) > 1 else os.getenv("RUC_DIR", DEFAULT_DIR)
-    mongo_url = os.getenv("MONGODB_URL", "mongodb://127.0.0.1:27017")
+def _aplicar_public_host(host: str) -> None:
+    """
+    Troca o host do MONGODB_URL pelo proxy TCP publico.
 
-    files = sorted(glob.glob(os.path.join(ruc_dir, "ruc*.txt")))
-    if not files:
-        print(f"Nenhum ruc*.txt em {ruc_dir}")
-        sys.exit(1)
-    print(f"Arquivos: {len(files)} em {ruc_dir}")
+    Rodando de fora do Railway, o MONGODB_URL do servico aponta para a rede
+    privada (`*.railway.internal`), que so resolve la dentro. Precisa acontecer
+    ANTES do init_db, que e quem le a configuracao.
+    """
+    url = os.environ.get("MONGODB_URL") or os.environ.get("MONGO_PUBLIC_URL", "")
+    if url:
+        os.environ["MONGODB_URL"] = re.sub(
+            r"(://(?:[^@/]*@)?)[^/?]+", r"\g<1>" + host, url, count=1)
 
-    coll = pymongo.MongoClient(mongo_url)["wmapp_admin"]["ruc_registry"]
-    print("Limpando coleção anterior…")
-    coll.drop()
 
-    t0 = time.time()
-    total = malformed = 0
-    buf = []
+async def _main(args) -> int:
+    if args.public_host:
+        _aplicar_public_host(args.public_host)
 
-    def flush():
-        nonlocal buf
-        if buf:
-            coll.insert_many(buf, ordered=False)
-            buf = []
+    from app.database import init_db, close_db      # noqa: PLC0415 — depois do env
+    from app.services import ruc_registry           # noqa: PLC0415
 
-    for path in files:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                parts = line.rstrip("\n").split("|")
-                if len(parts) < 5 or not parts[0].strip():
-                    malformed += 1
-                    continue
-                ruc = parts[0].strip()
-                if not ruc.isdigit():
-                    malformed += 1
-                    continue
-                buf.append({
-                    "ruc": ruc,
-                    "nombre": parts[1].strip(),
-                    "dv": parts[2].strip(),
-                    "estado": parts[4].strip().upper(),
-                })
-                total += 1
-                if len(buf) >= BATCH:
-                    flush()
-        print(f"  {os.path.basename(path)} -> acumulado {total:,}")
-    flush()
-
-    print("Criando índice único em ruc…")
-    coll.create_index("ruc", unique=True)
-
-    print("=" * 50)
-    print(f"Importados: {total:,} | malformados: {malformed:,} | {time.time()-t0:.1f}s")
-    print("count na coleção:", coll.count_documents({}))
-    # sanity: distribuição de estados (amostra)
-    print("estados:", list(coll.aggregate([
-        {"$group": {"_id": "$estado", "n": {"$sum": 1}}},
-        {"$sort": {"n": -1}},
-    ])))
+    await init_db()
+    try:
+        if args.status:
+            print(await ruc_registry.status())
+            return 0
+        print("Sincronizando o padron RUC (pode levar alguns minutos)...")
+        r = await ruc_registry.sincronizar(forcar=args.forcar)
+        print(r)
+        return 0 if r.get("status") in ("ok", "sem_mudanca") else 1
+    finally:
+        await close_db()
 
 
 if __name__ == "__main__":
-    main()
+    p = argparse.ArgumentParser(description="Sincroniza o padron RUC do DNIT.")
+    p.add_argument("--forcar", action="store_true",
+                   help="reimporta mesmo se o Last-Modified nao mudou")
+    p.add_argument("--status", action="store_true",
+                   help="mostra o estado da ultima sincronizacao")
+    p.add_argument("--public-host", metavar="HOST:PORT",
+                   help="troca o host da URL (proxy TCP publico do Railway)")
+    sys.exit(asyncio.run(_main(p.parse_args())))

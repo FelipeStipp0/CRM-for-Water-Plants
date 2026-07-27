@@ -1,7 +1,8 @@
 """
 Consulta do registro de RUC (dados DNIT) — store nacional compartilhado.
 
-Vive na coleção `ruc_registry` do banco admin (wmapp_admin), indexada por `ruc`
+Vive na coleção `ruc_registry` do banco `wmapp_ruc` (separado do admin
+de propósito: um reset do ambiente não leva o padrón junto), indexada por `ruc`
 (sem dígito verificador). É o mesmo dado para todas as orgs, por isso não é
 replicado por tenant.
 
@@ -10,7 +11,7 @@ outro estado (CANCELADO / SUSPENSION TEMPORAL / BLOQUEADO / CANCELADO DEFINITIVO
 → **no contribuyente** (usa só CI sem DV).
 """
 
-from app.database import get_admin_db
+from app.database import get_ruc_db
 
 COLLECTION = "ruc_registry"
 
@@ -31,7 +32,7 @@ async def lookup(doc: str) -> dict:
         return {"found": False, "ruc": num, "estado": None,
                 "es_contribuyente": False, "nombre": None, "dv": None}
 
-    reg = await get_admin_db()[COLLECTION].find_one({"ruc": num})
+    reg = await get_ruc_db()[COLLECTION].find_one({"ruc": num})
     if not reg:
         return {"found": False, "ruc": num, "estado": None,
                 "es_contribuyente": False, "nombre": None, "dv": None}

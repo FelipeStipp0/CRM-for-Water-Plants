@@ -50,6 +50,29 @@ async def _backup_cron():
             logger.error(f"[backup_cron] erro no backup diário: {err}")
 
 
+async def _ruc_cron():
+    """
+    Mantém o padrón RUC do DNIT em dia (publicação mensal, dia incerto).
+
+    Verifica todo dia às 04:00 em vez de "todo dia 1": o DNIT publica quando
+    publica (a última saiu dia 2). A checagem é barata — 10 HEADs — e só baixa
+    de fato quando o Last-Modified muda, então rodar diariamente não custa nada.
+    """
+    from datetime import datetime, timedelta
+    from app.services.ruc_registry import sincronizar
+    while True:
+        now = datetime.now()
+        next_run = now.replace(hour=4, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        await asyncio.sleep((next_run - now).total_seconds())
+        try:
+            r = await sincronizar()
+            logger.info(f"[ruc_cron] {r}")
+        except Exception as err:
+            logger.error(f"[ruc_cron] erro ao sincronizar o padrón RUC: {err}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Gerencia o ciclo de vida da aplicacao."""
@@ -57,11 +80,13 @@ async def lifespan(app: FastAPI):
     await init_db()
     cron_task = asyncio.create_task(_cutoff_cron())
     backup_task = asyncio.create_task(_backup_cron())
+    ruc_task = asyncio.create_task(_ruc_cron())
     yield
     # Shutdown
     cron_task.cancel()
     backup_task.cancel()
-    for task in (cron_task, backup_task):
+    ruc_task.cancel()
+    for task in (cron_task, backup_task, ruc_task):
         try:
             await task
         except asyncio.CancelledError:

@@ -151,6 +151,20 @@ def get_admin_db() -> AsyncIOMotorDatabase:
     return _admin_client["wmapp_admin"]
 
 
+def get_ruc_db() -> AsyncIOMotorDatabase:
+    """
+    Retorna o database do padron RUC (wmapp_ruc).
+
+    Fica FORA do wmapp_admin de proposito: sao ~2 milhoes de registros publicos
+    do DNIT, iguais para todas as orgs e caros de reimportar. Separado, um reset
+    do ambiente (que derruba admin + orgs) nao leva o padron junto.
+    Mesmo cliente Mongo do admin — e outro database, nao outra credencial.
+    """
+    if _admin_client is None:
+        raise RuntimeError("Database nao inicializado. Chame init_db() primeiro.")
+    return _admin_client["wmapp_ruc"]
+
+
 def get_org_db(slug: str) -> AsyncIOMotorDatabase:
     """
     Retorna o database Motor de uma org pelo slug.
