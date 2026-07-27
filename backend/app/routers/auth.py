@@ -15,7 +15,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
 from app.config import get_settings
 from app.models.user import User
-from app.schemas.user import UserCreate, UserResponse, UserProfileUpdate, Token, PasswordChange
+from app.schemas.user import UserCreate, UserResponse, UserProfileUpdate, UserAdminUpdate, Token, PasswordChange
 from app.utils.security import (
     verify_password,
     get_password_hash,
@@ -208,6 +208,22 @@ async def register(
     )
     await user.insert()
 
+    # Convite por email. Best-effort de propósito: o usuário já está criado, e
+    # falha de email não pode desfazer isso nem devolver erro ao master. Sem
+    # isto, o operador nascia com must_change_password=True e ninguém recebia a
+    # senha temporária — era preciso resetar a senha para conseguir entrar.
+    from app.middleware.org_context import get_org_slug
+    from app.services.email import enviar_convite_operador
+    try:
+        await enviar_convite_operador(
+            para=user.email, nombre=user.full_name,
+            org_slug=get_org_slug() or "", username=user.username,
+            senha_temporal=user_data.password, convidado_por=current_user.full_name,
+        )
+    except Exception as err:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).error("[register] convite nao enviado: %s", err)
+
     return UserResponse(
         id=str(user.id),
         username=user.username,
@@ -322,6 +338,33 @@ async def delete_avatar(
     return _user_response(current_user)
 
 
+# Catálogo de escopos — FONTE ÚNICA. A UI monta os checkboxes a partir daqui, em
+# vez de manter uma lista paralela: era assim que "Caja" acabou gravando o escopo
+# `payments` (o operador ia parar em Pagamentos em vez do Modo Caja), que `caja` e
+# `sifen` nunca puderam ser concedidos, e que `settings` aparecia sem existir —
+# Configuración é gateada por role master, não por escopo.
+SCOPES_DISPONIVEIS: list[dict] = [
+    {"scope": "clients", "label": "Clientes"},
+    {"scope": "readings", "label": "Lecturas"},
+    {"scope": "invoices", "label": "Facturación"},
+    {"scope": "payments", "label": "Pagos"},
+    {"scope": "caja", "label": "Modo Caja (cajero)"},
+    {"scope": "cutoff", "label": "Corte y reactivación"},
+    {"scope": "finance", "label": "Finanzas"},
+    {"scope": "sponsors", "label": "Subsidios"},
+    {"scope": "sifen", "label": "Facturación electrónica"},
+    {"scope": "*", "label": "Acceso total"},
+]
+
+
+@router.get("/scopes")
+async def listar_scopes(
+    current_user: Annotated[User, Depends(get_current_master)],
+):
+    """Escopos concedíveis. A UI usa isto para montar a tela de permissões."""
+    return SCOPES_DISPONIVEIS
+
+
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
     current_user: Annotated[User, Depends(get_current_master)],
@@ -353,6 +396,74 @@ async def toggle_user_active(
     user.is_active = new_active
 
     return _user_response(user)
+
+
+@router.patch("/users/{username}", response_model=UserResponse)
+async def update_user(
+    username: str,
+    body: UserAdminUpdate,
+    current_user: Annotated[User, Depends(get_current_master)],
+):
+    """
+    Edita cargo, permissões e dados de um usuário. Requer master.
+
+    É o caminho da promoção: um operador vira master, ou ganha/perde módulos,
+    sem precisar recriar a conta (o que perderia o histórico dele).
+    """
+    user = await User.find_one(User.username == username)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario nao encontrado")
+
+    dados = body.model_dump(exclude_none=True)
+
+    # Rebaixar a si mesmo tranca a org: sem master ninguém edita mais ninguém.
+    if username == current_user.username and dados.get("role") == "operator":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No podés quitarte el rol master a vos mismo.",
+        )
+    if dados.get("role") == "master":
+        dados["scopes"] = ["*"]          # master tem tudo por definição
+    elif dados.get("role") == "operator" and not dados.get("scopes"):
+        dados["scopes"] = [s for s in user.scopes if s != "*"]
+
+    if dados.get("email") and dados["email"] != user.email:
+        if await User.find_one(User.email == dados["email"]):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Email ya usado por otro usuario")
+
+    from datetime import datetime
+    dados["updated_at"] = datetime.utcnow()
+    await user.update({"$set": dados})
+    for k, v in dados.items():
+        setattr(user, k, v)
+    return _user_response(user)
+
+
+@router.delete("/users/{username}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    username: str,
+    current_user: Annotated[User, Depends(get_current_master)],
+):
+    """
+    Remove um usuário. Requer master.
+
+    Duas travas: não dá para se autoexcluir, nem para remover o último master —
+    qualquer uma das duas deixaria a org sem quem administra.
+    """
+    if username == current_user.username:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="No podés eliminar tu propio usuario.")
+
+    user = await User.find_one(User.username == username)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario nao encontrado")
+
+    if user.role == "master" and await User.find(User.role == "master").count() <= 1:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Es el último master: la organización quedaría sin administrador.")
+
+    await user.delete()
 
 
 @router.post("/change-password")

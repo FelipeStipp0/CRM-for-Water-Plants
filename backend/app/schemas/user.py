@@ -16,6 +16,20 @@ class UserCreate(BaseModel):
     scopes: list[str] = Field(default_factory=list)
 
 
+class UserAdminUpdate(BaseModel):
+    """
+    Edicao de um usuario PELO MASTER (diferente de UserUpdate, que e o proprio
+    usuario mexendo no seu perfil). E o caminho da promocao: mudar cargo e
+    modulos sem recriar a conta, o que perderia o historico da pessoa.
+    """
+    full_name: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    email: Optional[EmailStr] = None
+    role: Optional[Literal["master", "operator"]] = None
+    scopes: Optional[list[str]] = None
+    position: Optional[str] = None
+    phone: Optional[str] = None
+
+
 class UserResponse(BaseModel):
     id: str
     username: str

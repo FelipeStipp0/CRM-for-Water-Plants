@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     r2_bucket_name: str = ""
     r2_public_url: str = ""
 
+    # Email transacional (Forward Email) — mesmo provedor e remetente do admin-api.
+    # Sem a chave, o envio vira no-op e o cadastro do usuário segue funcionando.
+    forward_email_api_key: str = ""
+    email_from: str = "Saneo <juntas@arqsoftware.com.br>"
+
     # Mapbox (tile proxy)
     mapbox_token: str = ""
     mapbox_username: str = "mapbox"

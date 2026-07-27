@@ -124,6 +124,24 @@ class AuthService:
         """Ativa ou desativa um usuario. Requer role master."""
         return api.patch(f"/auth/users/{username}/toggle-active", data={})
 
+    def list_scopes(self) -> list[dict]:
+        """
+        Catalogo de escopos concediveis, direto do backend.
+
+        A UI NAO deve manter uma lista propria: era assim que "Caja" gravava o
+        escopo `payments` (o cajero caia em Pagamentos) e que `caja` e `sifen`
+        nunca podiam ser concedidos.
+        """
+        return api.get("/auth/scopes")
+
+    def update_user(self, username: str, data: dict) -> dict:
+        """Edita cargo/permissoes de um usuario. Requer master. E a promocao."""
+        return api.patch(f"/auth/users/{username}", data=data)
+
+    def delete_user(self, username: str) -> None:
+        """Remove um usuario. Requer master."""
+        api.delete(f"/auth/users/{username}")
+
 
 # Instancia global
 auth_service = AuthService()

@@ -868,6 +868,21 @@ class SettingsView(ft.Container):
                     primary=False,
                 ) if not is_self else ft.Container()
 
+                # Editar e excluir: sem isto, promover alguem exigiria recriar a
+                # conta (perdendo o historico) e um usuario desligado so podia
+                # ser desativado, nunca removido.
+                edit_btn = ft.IconButton(
+                    icon=ft.Icons.EDIT_OUTLINED, icon_size=18,
+                    icon_color=COLORS["text_secondary"], tooltip="Editar cargo y permisos",
+                    on_click=lambda ev, usr=u: self._open_edit_user_modal(usr),
+                )
+                del_btn = ft.IconButton(
+                    icon=ft.Icons.DELETE_OUTLINE, icon_size=18,
+                    icon_color=COLORS["accent_error"], tooltip="Eliminar usuario",
+                    on_click=lambda ev, usr=u: self._confirm_delete_user(usr),
+                    visible=not is_self,
+                )
+
                 row = ft.Container(
                     content=ft.Row(
                         [
@@ -898,6 +913,8 @@ class SettingsView(ft.Container):
                                 expand=True,
                             ),
                             toggle_btn,
+                            edit_btn,
+                            del_btn,
                         ],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         spacing=10,
@@ -921,6 +938,124 @@ class SettingsView(ft.Container):
         except APIError as err:
             self.show_snackbar(friendly_error(err), error=True)
 
+    def _scope_options(self) -> list[tuple[str, str]]:
+        """
+        Catálogo vindo do BACKEND. Manter uma lista aqui foi o que causou o bug
+        do cajero: «Caja» gravava o escopo `payments`, então o usuário caía no
+        módulo de Pagamentos em vez do Modo Caja — e `caja` e `sifen` sequer
+        podiam ser concedidos. Se a chamada falhar, cai num mínimo seguro.
+        """
+        try:
+            return [(s["scope"], s["label"]) for s in auth_service.list_scopes()]
+        except Exception:  # noqa: BLE001
+            return [("clients", "Clientes"), ("readings", "Lecturas"),
+                    ("invoices", "Facturación"), ("payments", "Pagos"),
+                    ("caja", "Modo Caja (cajero)"), ("cutoff", "Corte y reactivación"),
+                    ("finance", "Finanzas"), ("sponsors", "Subsidios"),
+                    ("sifen", "Facturación electrónica"), ("*", "Acceso total")]
+
+    def _open_edit_user_modal(self, user: dict):
+        """Editar cargo e módulos de um usuário — é o caminho da promoção."""
+        if not self._is_master():
+            self.show_snackbar("Solo el master puede editar usuarios.", error=True)
+            return
+
+        full_name = create_text_field("Nombre completo", value=user.get("full_name", ""), width=320)
+        email_field = create_text_field("Email", value=user.get("email", ""), width=320)
+        position = create_text_field("Cargo (ej: Tesorero)", value=user.get("position") or "", width=240)
+        role_dd = ft.Dropdown(
+            label="Rol", value=user.get("role", "operator"), width=180,
+            options=[ft.dropdown.Option("operator", "Operador"),
+                     ft.dropdown.Option("master", "Master")],
+            border_color=COLORS["border"], focused_border_color=COLORS["border_focus"],
+        )
+        atuais = set(user.get("scopes") or [])
+        checks = {sc: ft.Checkbox(label=lb, value=sc in atuais)
+                  for sc, lb in self._scope_options()}
+        box = ft.ResponsiveRow(
+            [ft.Container(content=cb, col={"sm": 6, "md": 4}) for cb in checks.values()],
+            run_spacing=4, visible=role_dd.value == "operator")
+        label = ft.Text("Módulos de acceso (para operadores):",
+                        color=COLORS["text_secondary"], size=12,
+                        visible=role_dd.value == "operator")
+        aviso = ft.Text("", size=12, color=COLORS["accent_error"])
+
+        def on_role(ev):
+            é_op = role_dd.value == "operator"
+            label.visible = box.visible = é_op
+            self._safe_update(label)
+            self._safe_update(box)
+
+        role_dd.on_change = on_role
+
+        def salvar(ev):
+            payload = {
+                "full_name": (full_name.value or "").strip(),
+                "email": (email_field.value or "").strip(),
+                "role": role_dd.value,
+                "position": (position.value or "").strip() or None,
+            }
+            if role_dd.value == "operator":
+                sel = [sc for sc, cb in checks.items() if cb.value]
+                if not sel:
+                    aviso.value = "Elegí al menos un módulo."
+                    self._safe_update(aviso)
+                    return
+                payload["scopes"] = sel
+            try:
+                auth_service.update_user(user["username"], payload)
+            except APIError as err:
+                aviso.value = friendly_error(err)
+                self._safe_update(aviso)
+                return
+            modal.close()
+            self.show_snackbar("✓ Usuario actualizado.")
+            self._load_users()
+
+        modal = AppModal(
+            page=self.page,
+            title=f"Editar {user.get('username')}",
+            content=ft.Column([
+                ft.Row([full_name, role_dd], spacing=10),
+                ft.Row([email_field, position], spacing=10),
+                label, box, aviso,
+            ], spacing=12, tight=True, scroll=ft.ScrollMode.AUTO),
+            actions=[
+                ModalAction(t("common.cancel"), on_click=lambda ev: modal.close()),
+                ModalAction(t("common.save"), on_click=salvar, primary=True),
+            ],
+            width_pct=0.5,
+        )
+        modal.open()
+
+    def _confirm_delete_user(self, user: dict):
+        """Exclusão é irreversível — o backend ainda barra o último master."""
+        def do_delete(ev):
+            try:
+                auth_service.delete_user(user["username"])
+            except APIError as err:
+                self.show_snackbar(friendly_error(err), error=True)
+                return
+            finally:
+                modal.close()
+            self.show_snackbar("Usuario eliminado.")
+            self._load_users()
+
+        modal = AppModal(
+            page=self.page,
+            title="Eliminar usuario",
+            content=ft.Text(
+                f"¿Eliminar «{user.get('full_name')}» (@{user.get('username')})? "
+                "Esta acción no se puede deshacer.",
+                color=COLORS["text_secondary"]),
+            actions=[
+                ModalAction(t("common.cancel"), on_click=lambda ev: modal.close()),
+                ModalAction(t("common.delete"), on_click=do_delete, danger=True),
+            ],
+            width_pct=0.36,
+        )
+        modal.open()
+
     def _open_create_user_modal(self, e=None):
         if not self._is_master():
             self.show_snackbar("Solo el master puede crear usuarios.", error=True)
@@ -943,17 +1078,7 @@ class SettingsView(ft.Container):
             focused_border_color=COLORS["border_focus"],
         )
 
-        scope_options = [
-            ("clients", "Clientes"),
-            ("readings", "Lecturas"),
-            ("invoices", "Facturación"),
-            ("payments", "Caja"),
-            ("cutoff", "Corte"),
-            ("finance", "Finanzas"),
-            ("sponsors", "Subsidios"),
-            ("settings", "Configuración"),
-            ("*", "Acceso total (*)"),
-        ]
+        scope_options = self._scope_options()
         scope_checks: dict[str, ft.Checkbox] = {}
         for scope, label in scope_options:
             scope_checks[scope] = ft.Checkbox(label=label, value=False)
