@@ -88,12 +88,41 @@ class _Paso(ft.Row):
         self.label.color = COLORS["text_muted"]
 
 
+def _formato_kude() -> str:
+    """'a4' ou 'p80' — o mesmo ajuste de «Configuración» que vale para faturas."""
+    from config.local_settings import get_invoice_print_format
+
+    return "a4" if get_invoice_print_format() == "a4" else "p80"
+
+
+def _logo_cuadrada() -> bytes | None:
+    """Logo 1×1 da junta para o cabeçalho do KuDE A4 (o P80 não usa)."""
+    import base64
+
+    from services.settings_service import settings_service
+
+    try:
+        b64 = (settings_service.get() or {}).get("logo_cuadrado_base64")
+        return base64.b64decode(b64) if b64 else None
+    except Exception:  # noqa: BLE001 — sem logo o A4 sai igual, só sem a marca
+        return None
+
+
 def generar_kude(emission_id: str) -> bytes:
-    """Baixa o XML assinado e monta o KuDE (P80). Levanta em falha."""
-    from services.pdf_generation.kude import KudeP80Generator
+    """
+    Baixa o XML assinado e monta o KuDE no formato configurado. Levanta em falha.
+
+    A4 e P80 são o MESMO documento fiscal — muda só a representação impressa.
+    Segue o ajuste de formato de impressão das faturas, para o operador não ter
+    dois lugares diferentes para dizer que tipo de papel a impressora tem.
+    """
+    from services.pdf_generation.kude import KudeA4Generator, KudeP80Generator
 
     xml = sifen_service.get_emision_xml(emission_id)
-    pdf = KudeP80Generator().generate(xml)
+    if _formato_kude() == "a4":
+        pdf = KudeA4Generator().generate(xml, _logo_cuadrada())
+    else:
+        pdf = KudeP80Generator().generate(xml)
     if not pdf:
         raise RuntimeError("KuDE vacío (XML sin datos para imprimir)")
     return pdf
@@ -108,8 +137,9 @@ def imprimir_kude(emission_id: str, pdf: bytes | None = None) -> None:
     """
     from services.pdf_generation.printer_manager import printer_manager
 
+    impressora = "a4" if _formato_kude() == "a4" else "thermal"
     printer_manager.print_pdf(pdf if pdf is not None else generar_kude(emission_id),
-                              printer_type="thermal", job_name=f"kude_{emission_id[:8]}")
+                              printer_type=impressora, job_name=f"kude_{emission_id[:8]}")
 
 
 def open_sifen_progress(page: ft.Page, show_snackbar, *, emission_id: str,

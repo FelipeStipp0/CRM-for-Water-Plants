@@ -136,6 +136,13 @@ def _collect_requirements_tree():
             _collect_package(module_name)
 
         for dep in dist.requires or []:
+            # Pula dependencia OPCIONAL (`; extra == "..."`). Sem isto o walk trata
+            # extra como obrigatoria e arrasta a pilha cientifica inteira: flet
+            # declara numpy; pandas declara matplotlib e numba (-> llvmlite); daí
+            # vem geopandas, PyKrige e OpenCV. Nada disso e importado pelo app,
+            # e sozinho respondia por ~280 MB do bundle.
+            if "extra ==" in dep:
+                continue
             dep_name = _extract_req_name(dep)
             if dep_name:
                 to_visit.append(_normalize_dist_name(dep_name))
@@ -167,7 +174,15 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # Rede de seguranca: mesmo que algo volte a alcancar estes pacotes pela
+    # arvore de dependencias, eles ficam fora. Nenhum e importado pelo app —
+    # conferido com grep em services/ views/ components/ utils/ config/.
+    # `flet_web` sao os assets do modo web; este app e desktop (flet_desktop).
+    excludes=[
+        "cv2", "scipy", "numba", "llvmlite", "pandas", "matplotlib",
+        "geopandas", "pykrige", "imageio", "IPython", "notebook",
+        "tkinter", "flet_web",
+    ],
     noarchive=False,
     optimize=0,
 )

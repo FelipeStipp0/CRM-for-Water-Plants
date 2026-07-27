@@ -7,5 +7,5 @@
     "org_slug": "demo",
     "invoice_print_format": "p80",
     "machine_id": "7cb3b51dafb34fd18c135c98a8a28c1b",
-    "auth_token": null
+    "auth_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjYWplcm8iLCJvcmciOiJkZW1vIiwicm9sZSI6Im9wZXJhdG9yIiwiZXhwIjoxNzg1MjQ4NzA2fQ.XAaL9_I766mZfmKJHnmIiGW2fexi9OJzv3f6Z35g0_A"
 }
