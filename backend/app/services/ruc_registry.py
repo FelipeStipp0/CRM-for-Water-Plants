@@ -107,7 +107,11 @@ async def _versao_anterior() -> dict:
 #   sincronizar_do_r2()   roda no cron da API        → lê o pacote e troca a coleção
 #
 # A parte cara (2 milhões de inserts) fica na rede privada, onde funciona.
-R2_KEY = "ruc/padron-latest.json.gz"
+# JSONL (um registro por linha), não um array JSON: assim o lado que aplica lê em
+# streaming e a memória fica no tamanho do lote. Carregar os 2 milhões de dicts de
+# uma vez levava o container a ~1,2 GB (limite 2 GB, com a API rodando ao lado) e
+# derrubava a conexão com o Mongo no meio da carga.
+R2_KEY = "ruc/padron-latest.jsonl.gz"
 R2_META_KEY = "ruc/padron-latest.meta.json"
 
 
@@ -155,7 +159,11 @@ async def publicar_no_r2(forcar: bool = False) -> dict:
     if not registros:
         return {"status": "erro", "error": "padron vazio"}
 
-    pacote = gzip.compress(json.dumps(registros).encode())
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+        for reg in registros:
+            gz.write((json.dumps(reg, separators=(",", ":")) + "\n").encode())
+    pacote = buf.getvalue()
     r2_put(R2_KEY, pacote, "application/gzip")
     r2_put(R2_META_KEY, json.dumps({
         "last_modified": marcas, "total": len(registros),
@@ -189,18 +197,34 @@ async def sincronizar_do_r2(forcar: bool = False) -> dict:
         return {"status": "sem_mudanca", "verificado_em": inicio,
                 "total": anterior.get("total", 0)}
 
-    registros = json.loads(gzip.decompress(r2_get(R2_KEY)))
-    total = len(registros)
-
+    # A checagem de tamanho usa a meta: dá para recusar o pacote ANTES de baixar
+    # os 33 MB e antes de mexer no banco.
     esperado = anterior.get("total", 0)
-    if esperado and total < esperado * 0.9:
-        return {"status": "suspeito", "total": total, "anterior": esperado}
+    prometido = meta.get("total", 0)
+    if esperado and prometido and prometido < esperado * 0.9:
+        return {"status": "suspeito", "total": prometido, "anterior": esperado}
 
     db = get_ruc_db()
     tmp = db[TMP_COLLECTION]
     await tmp.drop()
-    for i in range(0, total, BATCH):
-        await tmp.insert_many(registros[i:i + BATCH], ordered=False)
+
+    # Streaming: a memória fica no tamanho do lote, não no do padrón inteiro.
+    total = 0
+    lote: list[dict] = []
+    with gzip.GzipFile(fileobj=io.BytesIO(r2_get(R2_KEY))) as gz:
+        for linha in gz:
+            lote.append(json.loads(linha))
+            if len(lote) >= BATCH:
+                await tmp.insert_many(lote, ordered=False)
+                total += len(lote)
+                lote = []
+    if lote:
+        await tmp.insert_many(lote, ordered=False)
+        total += len(lote)
+
+    if esperado and total < esperado * 0.9:
+        await tmp.drop()
+        return {"status": "suspeito", "total": total, "anterior": esperado}
 
     await tmp.create_index("ruc", unique=True)
     await db[TMP_COLLECTION].rename(COLLECTION, dropTarget=True)
