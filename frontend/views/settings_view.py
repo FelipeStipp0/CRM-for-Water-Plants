@@ -876,6 +876,11 @@ class SettingsView(ft.Container):
                     icon_color=COLORS["text_secondary"], tooltip="Editar cargo y permisos",
                     on_click=lambda ev, usr=u: self._open_edit_user_modal(usr),
                 )
+                reset_btn = ft.IconButton(
+                    icon=ft.Icons.LOCK_RESET, icon_size=18,
+                    icon_color=COLORS["text_secondary"], tooltip="Restablecer contraseña",
+                    on_click=lambda ev, usr=u: self._reset_user_password(usr),
+                )
                 del_btn = ft.IconButton(
                     icon=ft.Icons.DELETE_OUTLINE, icon_size=18,
                     icon_color=COLORS["accent_error"], tooltip="Eliminar usuario",
@@ -914,6 +919,7 @@ class SettingsView(ft.Container):
                             ),
                             toggle_btn,
                             edit_btn,
+                            reset_btn,
                             del_btn,
                         ],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -953,6 +959,68 @@ class SettingsView(ft.Container):
                     ("caja", "Modo Caja (cajero)"), ("cutoff", "Corte y reactivación"),
                     ("finance", "Finanzas"), ("sponsors", "Subsidios"),
                     ("sifen", "Facturación electrónica"), ("*", "Acceso total")]
+
+    def _avisar_credencial(self, resposta: dict, username: str):
+        """
+        No caminho feliz o master não vê a senha — ela foi por email ao usuário.
+        Só quando o envio falha ela aparece, para ele repassar por outro canal;
+        senão ninguém conseguiria entrar.
+        """
+        if resposta.get("invite_sent"):
+            self.show_snackbar(f"Usuario {username} creado. Credenciales enviadas por email.")
+            return
+
+        senha = resposta.get("temp_password") or ""
+        modal = AppModal(
+            page=self.page,
+            title="No se pudo enviar el email",
+            content=ft.Column([
+                ft.Text(f"El usuario «{username}» fue creado, pero el correo no salió. "
+                        "Entregale esta contraseña temporal por otro medio:",
+                        color=COLORS["text_secondary"], size=13),
+                ft.Container(
+                    content=ft.Text(senha, size=20, weight=ft.FontWeight.BOLD,
+                                    color=COLORS["text_primary"],
+                                    font_family="Consolas"),
+                    bgcolor=COLORS["bg_elevated"], border_radius=RADIUS["md"],
+                    padding=ft.Padding.symmetric(horizontal=18, vertical=12),
+                    alignment=ft.Alignment.CENTER,
+                ),
+                ft.Text("No vuelve a mostrarse. El usuario deberá cambiarla al ingresar.",
+                        size=12, color=COLORS["accent_warning"]),
+            ], spacing=14, tight=True),
+            actions=[ModalAction(t("common.close"), on_click=lambda ev: modal.close(), primary=True)],
+            width_pct=0.4,
+        )
+        modal.open()
+
+    def _reset_user_password(self, user: dict):
+        """Senha nova gerada no servidor e enviada ao usuário."""
+        def do_reset(ev):
+            try:
+                r = auth_service.reset_user_password(user["username"])
+            except APIError as err:
+                self.show_snackbar(friendly_error(err), error=True)
+                return
+            finally:
+                modal.close()
+            self._avisar_credencial(r, user["username"])
+            self._load_users()
+
+        modal = AppModal(
+            page=self.page,
+            title="Restablecer contraseña",
+            content=ft.Text(
+                f"Se generará una contraseña temporal nueva para «{user.get('full_name')}» "
+                "y se enviará a su email. La contraseña actual dejará de funcionar.",
+                color=COLORS["text_secondary"]),
+            actions=[
+                ModalAction(t("common.cancel"), on_click=lambda ev: modal.close()),
+                ModalAction("Restablecer", on_click=do_reset, primary=True),
+            ],
+            width_pct=0.38,
+        )
+        modal.open()
 
     def _open_edit_user_modal(self, user: dict):
         """Editar cargo e módulos de um usuário — é o caminho da promoção."""
@@ -1064,8 +1132,6 @@ class SettingsView(ft.Container):
         username_field = create_text_field("Usuario", width=220)
         full_name_field = create_text_field("Nombre completo", width=320)
         email_field = create_text_field("Email", width=320)
-        password_field = create_text_field("Contraseña", password=True, width=220)
-        confirm_field = create_text_field("Confirmar contraseña", password=True, width=220)
         role_dd = ft.Dropdown(
             label="Rol",
             value="operator",
@@ -1118,21 +1184,14 @@ class SettingsView(ft.Container):
             username = (username_field.value or "").strip()
             full_name = (full_name_field.value or "").strip()
             email = (email_field.value or "").strip()
-            password = (password_field.value or "").strip()
-            confirm = (confirm_field.value or "").strip()
             role = role_dd.value or "operator"
 
             selected_scopes = [scope for scope, cb in scope_checks.items() if cb.value]
             if role == "master":
                 selected_scopes = ["*"]
 
-            if not username or not full_name or not email or not password:
+            if not username or not full_name or not email:
                 error_text.value = "Complete todos los campos obligatorios."
-                error_text.visible = True
-                self._safe_update(error_text)
-                return
-            if password != confirm:
-                error_text.value = "Las contraseñas no coinciden."
                 error_text.visible = True
                 self._safe_update(error_text)
                 return
@@ -1143,17 +1202,16 @@ class SettingsView(ft.Container):
                 return
 
             try:
-                auth_service.register(
+                novo = auth_service.register(
                     username=username,
                     email=email,
-                    password=password,
                     full_name=full_name,
                     role=role,
                     scopes=selected_scopes,
                 )
                 if _modal_ref:
                     _modal_ref[0].close()
-                self.show_snackbar(f"Usuario {username} creado. Debe cambiar su contraseña al ingresar.")
+                self._avisar_credencial(novo, username)
                 self._load_users()
             except APIError as err:
                 error_text.value = str(err.detail)
@@ -1173,7 +1231,9 @@ class SettingsView(ft.Container):
                     ft.Row([username_field, role_dd], spacing=8, wrap=True),
                     ft.Row([full_name_field], spacing=8),
                     ft.Row([email_field], spacing=8),
-                    ft.Row([password_field, confirm_field], spacing=8, wrap=True),
+                    ft.Text("La contraseña temporal se genera automáticamente y "
+                            "se envía por email al usuario.",
+                            size=12, color=COLORS["text_secondary"]),
                     ft.Text("La contraseña es temporal — el usuario deberá cambiarla al ingresar.", size=11, color=COLORS["text_muted"]),
                     scopes_label,
                     scopes_container,

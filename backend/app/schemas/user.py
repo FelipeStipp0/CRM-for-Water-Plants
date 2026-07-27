@@ -8,9 +8,14 @@ from pydantic import BaseModel, EmailStr, Field
 
 
 class UserCreate(BaseModel):
+    """
+    Criacao de usuario pelo master.
+
+    NAO tem senha: ela e gerada no servidor e vai por email para o proprio
+    usuario. O master nao deve conhecer a credencial de outra pessoa.
+    """
     username: str = Field(min_length=3, max_length=50)
     email: EmailStr
-    password: str = Field(min_length=6)
     full_name: str = Field(min_length=2, max_length=100)
     role: Literal["master", "operator"] = "operator"
     scopes: list[str] = Field(default_factory=list)
@@ -31,6 +36,11 @@ class UserAdminUpdate(BaseModel):
 
 
 class UserResponse(BaseModel):
+    # Convite: `temp_password` so vem preenchida quando o email NAO saiu, para o
+    # master conseguir repassar por outro canal. No caminho feliz e sempre None.
+    invite_sent: Optional[bool] = None
+    temp_password: Optional[str] = None
+
     id: str
     username: str
     email: str

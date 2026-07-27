@@ -78,3 +78,20 @@ def decode_access_token(token: str) -> Optional[dict]:
         return payload
     except JWTError:
         return None
+
+
+def generate_temp_password() -> str:
+    """
+    Senha temporaria de primeiro acesso, gerada NO SERVIDOR.
+
+    O master nao deve escolher (nem conhecer) a senha de outra pessoa: destroi a
+    separacao de responsabilidade e, com o convite por email ativo, seria a senha
+    dele viajando por email. Quem recebe e o proprio usuario, que e obrigado a
+    troca-la no primeiro acesso (must_change_password).
+
+    Formato legivel ao telefone — sem 0/O e 1/I/l, que se confundem quando alguem
+    precisa ditar a senha.
+    """
+    import secrets
+    alfabeto = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+    return "-".join("".join(secrets.choice(alfabeto) for _ in range(4)) for _ in range(3))

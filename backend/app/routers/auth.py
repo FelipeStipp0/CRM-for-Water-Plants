@@ -19,6 +19,7 @@ from app.schemas.user import UserCreate, UserResponse, UserProfileUpdate, UserAd
 from app.utils.security import (
     verify_password,
     get_password_hash,
+    generate_temp_password,
     create_access_token,
     decode_access_token,
 )
@@ -197,10 +198,14 @@ async def register(
             detail="Username ou email ja cadastrado"
         )
 
+    # A senha é gerada AQUI, não escolhida pelo master. Ele não deve conhecer a
+    # credencial de outra pessoa — e com o convite por email ativo, seria a senha
+    # dele viajando por email. O usuário troca no primeiro acesso.
+    senha = generate_temp_password()
     user = User(
         username=user_data.username,
         email=user_data.email,
-        hashed_password=get_password_hash(user_data.password),
+        hashed_password=get_password_hash(senha),
         full_name=user_data.full_name,
         role=user_data.role,
         scopes=user_data.scopes,
@@ -208,17 +213,18 @@ async def register(
     )
     await user.insert()
 
-    # Convite por email. Best-effort de propósito: o usuário já está criado, e
-    # falha de email não pode desfazer isso nem devolver erro ao master. Sem
-    # isto, o operador nascia com must_change_password=True e ninguém recebia a
-    # senha temporária — era preciso resetar a senha para conseguir entrar.
+    # Convite por email. Best-effort: o usuário já está criado e falha de email
+    # não pode desfazer isso. Mas se não foi, ALGUÉM precisa da senha — devolvemos
+    # ao master só nesse caso, para ele repassar por outro canal. No caminho feliz
+    # o master nunca a vê.
     from app.middleware.org_context import get_org_slug
     from app.services.email import enviar_convite_operador
+    enviado = False
     try:
-        await enviar_convite_operador(
+        enviado = await enviar_convite_operador(
             para=user.email, nombre=user.full_name,
             org_slug=get_org_slug() or "", username=user.username,
-            senha_temporal=user_data.password, convidado_por=current_user.full_name,
+            senha_temporal=senha, convidado_por=current_user.full_name,
         )
     except Exception as err:  # noqa: BLE001
         import logging
@@ -234,6 +240,8 @@ async def register(
         must_change_password=user.must_change_password,
         scopes=user.scopes,
         created_at=user.created_at,
+        invite_sent=enviado,
+        temp_password=None if enviado else senha,
     )
 
 
@@ -438,6 +446,49 @@ async def update_user(
     for k, v in dados.items():
         setattr(user, k, v)
     return _user_response(user)
+
+
+@router.post("/users/{username}/reset-password", response_model=UserResponse)
+async def reset_user_password(
+    username: str,
+    current_user: Annotated[User, Depends(get_current_master)],
+):
+    """
+    Gera uma senha temporária nova e envia ao usuário. Requer master.
+
+    É o que resolve "esqueci a senha" e "o convite não chegou" sem o master
+    precisar conhecer a credencial. Ele só vê a senha se o email falhar.
+    """
+    user = await User.find_one(User.username == username)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario nao encontrado")
+
+    senha = generate_temp_password()
+    from datetime import datetime
+    await user.update({"$set": {
+        "hashed_password": get_password_hash(senha),
+        "must_change_password": True,
+        "updated_at": datetime.utcnow(),
+    }})
+    user.must_change_password = True
+
+    from app.middleware.org_context import get_org_slug
+    from app.services.email import enviar_convite_operador
+    enviado = False
+    try:
+        enviado = await enviar_convite_operador(
+            para=user.email, nombre=user.full_name,
+            org_slug=get_org_slug() or "", username=user.username,
+            senha_temporal=senha, convidado_por=current_user.full_name,
+        )
+    except Exception as err:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).error("[reset] envio falhou: %s", err)
+
+    resp = _user_response(user)
+    resp.invite_sent = enviado
+    resp.temp_password = None if enviado else senha
+    return resp
 
 
 @router.delete("/users/{username}", status_code=status.HTTP_204_NO_CONTENT)

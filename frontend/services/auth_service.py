@@ -86,18 +86,22 @@ class AuthService:
         self,
         username: str,
         email: str,
-        password: str,
         full_name: str,
         role: str = "operator",
         scopes: list[str] | None = None,
     ) -> dict:
-        """Registra novo operador na org. Requer role master."""
+        """
+        Registra novo operador na org. Requer role master.
+
+        SEM senha: ela e gerada no servidor e enviada por email ao proprio
+        usuario — o master nao deve conhecer a credencial de outra pessoa. A
+        resposta traz `invite_sent`, e `temp_password` so quando o email falhou.
+        """
         return api.post(
             "/auth/register",
             data={
                 "username": username,
                 "email": email,
-                "password": password,
                 "full_name": full_name,
                 "role": role,
                 "scopes": list(scopes or []),
@@ -137,6 +141,15 @@ class AuthService:
     def update_user(self, username: str, data: dict) -> dict:
         """Edita cargo/permissoes de um usuario. Requer master. E a promocao."""
         return api.patch(f"/auth/users/{username}", data=data)
+
+    def reset_user_password(self, username: str) -> dict:
+        """
+        Gera senha temporaria nova e envia ao usuario. Requer master.
+
+        A resposta traz `invite_sent`; `temp_password` so vem preenchida quando o
+        email NAO saiu — e o unico caso em que o master deve ver a senha.
+        """
+        return api.post(f"/auth/users/{username}/reset-password", data={})
 
     def delete_user(self, username: str) -> None:
         """Remove um usuario. Requer master."""
