@@ -79,3 +79,22 @@ async def test_fase_firmar_fecha_a_janela_de_desistencia(test_db):
     assert None in FASES_ABORTAVEIS
     assert EmissionFase.FIRMAR not in FASES_ABORTAVEIS
     assert EmissionFase.RECUPERAR not in FASES_ABORTAVEIS
+
+
+def test_ruc_ocasional_emite_como_innominado():
+    """
+    `44444401-7` marca cliente ocasional no cadastro (quem não tem documento
+    válido). Ele não existe no padrón, então sem tratamento sairia na factura
+    como se fosse uma cédula de verdade. No DTE o certo é innominado.
+    """
+    from app.services.sifen.receptor import build_receptor
+
+    for doc in ("44444401-7", "444444017", "44444401", ""):
+        rec = build_receptor(False, doc, "Cliente Ocasional", tipo_id=1)
+        assert rec["iTipIDRec"] == 5, doc
+        assert rec["dNumIDRec"] == "0"
+        assert rec["dNomRec"] == "Sin Nombre"
+
+    # uma cédula de verdade nao pode ser afetada
+    rec = build_receptor(False, "3436835", "Nair Teresa", tipo_id=1)
+    assert rec["iTipIDRec"] == 1 and rec["dNumIDRec"] == "3436835"

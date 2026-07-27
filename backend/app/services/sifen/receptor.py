@@ -13,6 +13,10 @@ Documento SEM dígito verificador: só os 7 (física) ou 8 (jurídica) números 
 from typing import Callable, Optional
 
 # iTipIDRec (D210) — tipos de identificação do receptor no contribuyente
+# RUC genérico de consumidor final (com e sem DV/pontuação, como aparece nos
+# cadastros importados). Marca "cliente ocasional", não um contribuyente real.
+RUC_OCASIONAL = {"44444401", "444444017"}
+
 TIPO_ID_DESC = {
     1: "Cédula paraguaya",
     2: "Pasaporte",
@@ -76,6 +80,13 @@ def build_receptor(
     # no contribuyente -> B2C obrigatório (D202)
     ito = tipo_operacion if tipo_operacion is not None else 2
     num = _limpa_doc(doc, tipo_id)
+    # `44444401-7` é o RUC genérico de consumidor final: no cadastro ele marca
+    # "cliente ocasional" (quem não tem documento válido — estrangeiro, ou dado
+    # quebrado). Ele NÃO existe no padrón, então cairia aqui como se fosse uma
+    # cédula de verdade e a factura sairia com esse número como CI. No DTE o
+    # certo é innominado (iTipIDRec=5), que é o que a linha abaixo já faz.
+    if num in RUC_OCASIONAL:
+        num = ""
     if tipo_id == 5 or not num:  # innominado (consumidor final sem identificação)
         return {
             "iNatRec": 2, "iTiOpe": ito, "iTipIDRec": 5,
