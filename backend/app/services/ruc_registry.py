@@ -18,6 +18,7 @@ Três cuidados que o import manual não tinha:
    sincronização; sem publicação nova, o job sai em ~10 requisições HEAD.
 """
 
+import asyncio
 import gzip
 import io
 import logging
@@ -26,6 +27,7 @@ from datetime import datetime
 from typing import Iterator, Optional
 
 import httpx
+from pymongo.errors import AutoReconnect, BulkWriteError, ServerSelectionTimeoutError
 
 from app.database import get_ruc_db
 
@@ -38,7 +40,7 @@ COLLECTION = "ruc_registry"
 TMP_COLLECTION = "ruc_registry_tmp"
 META_COLLECTION = "ruc_registry_meta"
 
-BATCH = 50_000
+BATCH = 5_000
 TIMEOUT = httpx.Timeout(120.0, connect=30.0)
 
 
@@ -208,25 +210,44 @@ async def sincronizar_do_r2(forcar: bool = False) -> dict:
     tmp = db[TMP_COLLECTION]
     await tmp.drop()
 
+    # Índice ANTES da carga, de propósito. Construí-lo no fim, sobre 2 milhões de
+    # documentos, exige uma ordenação externa que não cabe nos 256 MB de cache do
+    # WiredTiger deste servidor — e derrubava o Mongo no meio. Criado antes, o
+    # custo é incremental: cada lote paga um pouco.
+    await tmp.create_index("ruc", unique=True)
+
     # Streaming: a memória fica no tamanho do lote, não no do padrón inteiro.
     total = 0
     lote: list[dict] = []
+
+    async def _gravar(docs: list[dict]) -> int:
+        """Insere um lote, tolerando queda de conexão (o Mongo pode reiniciar)."""
+        for tentativa in range(5):
+            try:
+                await tmp.insert_many(docs, ordered=False)
+                return len(docs)
+            except BulkWriteError as e:
+                # Reenvio depois de uma queda: o que já entrou volta como
+                # duplicata e pode ser ignorado — a chave é o próprio RUC.
+                if all(err.get("code") == 11000 for err in e.details.get("writeErrors", [])):
+                    return len(docs)
+                raise
+            except (AutoReconnect, ServerSelectionTimeoutError):
+                await asyncio.sleep(2 * (tentativa + 1))
+        raise RuntimeError("Mongo indisponivel apos 5 tentativas")
+
     with gzip.GzipFile(fileobj=io.BytesIO(r2_get(R2_KEY))) as gz:
         for linha in gz:
             lote.append(json.loads(linha))
             if len(lote) >= BATCH:
-                await tmp.insert_many(lote, ordered=False)
-                total += len(lote)
+                total += await _gravar(lote)
                 lote = []
     if lote:
-        await tmp.insert_many(lote, ordered=False)
-        total += len(lote)
+        total += await _gravar(lote)
 
     if esperado and total < esperado * 0.9:
         await tmp.drop()
         return {"status": "suspeito", "total": total, "anterior": esperado}
-
-    await tmp.create_index("ruc", unique=True)
     await db[TMP_COLLECTION].rename(COLLECTION, dropTarget=True)
 
     await db[META_COLLECTION].update_one(
