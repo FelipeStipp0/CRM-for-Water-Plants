@@ -46,6 +46,11 @@ class Client(OrgDocument):
     # documento valido entra com o RUC de cliente ocasional (44444401-7), que por
     # definicao se repete. A identidade do cliente e a ligacao, nao a pessoa.
     ci_ruc: Indexed(str)
+
+    # Dono da ligação. Um titular costuma ter várias — casas, imóveis de aluguel,
+    # comércio + residência. Continua opcional: o cadastro funciona sem, e quem
+    # não tem titular é simplesmente uma ligação avulsa.
+    titular_id: Optional[Indexed(PydanticObjectId)] = None
     telefono: Optional[str] = None
     celular: Optional[str] = None
     email: Optional[str] = None  # p/ dEmailRec na fatura eletrônica (nem todo cliente tem)

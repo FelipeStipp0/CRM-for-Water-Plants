@@ -30,6 +30,7 @@ _initialized_orgs: set[str] = set()
 def _get_org_document_models() -> list:
     from app.models.user import User
     from app.models.client import Client
+    from app.models.titular import Titular
     from app.models.reading import Reading
     from app.models.invoice import Invoice, Counter
     from app.models.product import Product
@@ -43,7 +44,7 @@ def _get_org_document_models() -> list:
         SifenEmission, SifenSessionLock, SifenCredential, SifenCoordinator,
     )
     return [
-        User, Client, Reading, Invoice, Counter, Product, Payment,
+        User, Client, Titular, Reading, Invoice, Counter, Product, Payment,
         SystemSettings, CashTransaction, Expense, Employee,
         Payroll, CashSession, SponsorDebt, SponsorInvoice, CutoffNotice, AuditLog,
         SifenEmission, SifenSessionLock, SifenCredential, SifenCoordinator,
