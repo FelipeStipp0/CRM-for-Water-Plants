@@ -612,6 +612,11 @@ class WMApp:
         if self.splash:
             self.splash.show_check(t("splash.welcome"), hold_ms=650)
         self._enter_main_layout()
+        # Também no auto-login: sem isto o PC só se anunciava como dispositivo
+        # na sessão em que a senha foi digitada. Em toda reabertura por token —
+        # que é o caso normal — o coordenador nunca subia e a máquina sumia da
+        # lista de «Dispositivos».
+        self._start_sifen_coordinator()
 
     def _show_login(self, message: str | None = None):
         # Garante janela no tamanho da splash (sem maximizar para login).

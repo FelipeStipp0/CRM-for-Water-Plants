@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import re
+import sys
 from importlib import metadata
 from pathlib import Path
 
@@ -158,12 +159,53 @@ for pkg in ("pythoncom", "pywintypes"):
 for pkg in ("components", "services", "services.pdf_generation", "views", "utils", "config"):
     _collect_package(pkg)
 
+# Pipeline de emissao (backend puro). Em dev o sifen_executor acha via sys.path
+# porque `backend/` fica ao lado de `frontend/`; no app instalado nao existe esse
+# vizinho, entao precisa vir bundlado — senao o PC se registra como dispositivo
+# mas nunca consegue emitir (ExecutorIndisponivel).
+_backend_dir = spec_dir.parent / "backend"
+if _backend_dir.is_dir():
+    if str(_backend_dir) not in sys.path:
+        sys.path.insert(0, str(_backend_dir))
+    for pkg in ("app.services.sifen", "app.models", "app.utils"):
+        _collect_package(pkg)
+
 # Explicit app assets required at runtime (window icon / branding).
 assets_dir = spec_dir / "assets"
 for asset_name in ("junta.ico", "junta.png", "saneo.png", "saneo-icon.png"):
     asset_path = assets_dir / asset_name
     if asset_path.exists():
         datas.append((str(asset_path), "assets"))
+
+# --- nao distribuir codigo-fonte -------------------------------------------
+# collect_all/collect_data_files copiam os .py dos pacotes como DADOS, alem de
+# compila-los no PYZ. O efeito era o instalador carregar o fonte em texto puro —
+# inclusive o de services/sifen_adapter, que e o modulo fechado. Aqui removemos
+# fonte e docs dos pacotes LOCAIS; os modulos seguem funcionando porque vao como
+# bytecode no PYZ (via collect_submodules/hiddenimports).
+_PKGS_LOCAIS = ("services", "components", "views", "utils", "config", "app")
+_EXT_FONTE = (".py", ".pyi", ".pyx", ".md", ".txt")
+
+# Nunca copiar como dado, venha de onde vier. O adapter e um repo PRIVADO montado
+# por junction dentro da arvore: coleta-lo como dado levava 44 arquivos para o
+# instalador, incluindo o `.git` completo — historico, index e o config com a URL
+# do repo. O modulo continua funcionando: vai como bytecode no PYZ.
+_NUNCA = ("_adapter", "sifen_adapter", "/.git/", "/.git")
+
+
+def _e_fonte_local(entry):
+    origem, destino = str(entry[0]), str(entry[1]).replace("\\", "/")
+    raiz = destino.split("/")[0]
+    return raiz in _PKGS_LOCAIS and origem.lower().endswith(_EXT_FONTE)
+
+
+def _e_proibido(entry):
+    caminho = (str(entry[0]) + "|" + str(entry[1])).replace("\\", "/")
+    return any(p in caminho for p in _NUNCA)
+
+
+datas = [d for d in datas if not _e_fonte_local(d) and not _e_proibido(d)]
+binaries = [b for b in binaries if not _e_proibido(b)]
 
 a = Analysis(
     ['main.py'],

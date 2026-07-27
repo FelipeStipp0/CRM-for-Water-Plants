@@ -92,3 +92,6 @@ frontend/services/sifen_adapter/
 
 # Handoff de sessão: notas internas, nunca vão para o repo
 HANDOFF.md
+
+# Saida intermediaria do PyInstaller (--distpath alternativo)
+dist_tmp/
