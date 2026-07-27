@@ -45,6 +45,10 @@ def _sem_cancel_executor(job: dict) -> dict:
     raise RuntimeError("cancel_executor no configurado en este coordinador")
 
 
+class ExecutorIndisponivel(RuntimeError):
+    """Este PC não tem o pipeline de emissão instalado (adapter ausente)."""
+
+
 class SifenCoordinator:
     def __init__(self, executor: Executor, log: Optional[Callable[[str], None]] = None,
                  cancel_executor: Optional[Executor] = None):
@@ -126,6 +130,11 @@ class SifenCoordinator:
             # Desistência antes da firma: nada chegou ao SET, não é falha.
             payload = {"status": "ABORTADA"}
             self._log(f"abortada {emission_id}: {e}")
+        except ExecutorIndisponivel as e:
+            # Este PC foi liberado mas não tem o pipeline. A factura não falhou —
+            # ninguém tentou emiti-la. Volta pra fila, para outro device pegar.
+            payload = {"status": "PENDENTE"}
+            self._log(f"sem pipeline, devolvendo {emission_id} a fila: {e}")
         except Exception as e:  # noqa: BLE001
             payload = {"status": "FALHOU", "error": f"{type(e).__name__}: {e}"}
             self._log(f"falhou {emission_id}: {e}\n{traceback.format_exc()}")
@@ -165,10 +174,41 @@ class SifenCoordinator:
 _instance: Optional["SifenCoordinator"] = None
 
 
+def _executor_lazy(job: dict, on_fase=None) -> dict:
+    """
+    Importa o pipeline de emissão só na hora de executar um job.
+
+    O import arrasta o adapter fechado, que não existe em todo PC. Fazê-lo no
+    startup impedia o coordenador de sequer INICIAR — e como o anúncio do
+    dispositivo mora dentro do loop, o PC nunca aparecia na lista de
+    «Dispositivos» para o admin liberar. Ou seja: era preciso já poder emitir
+    para poder ser autorizado a emitir. Agora qualquer PC se registra, e só a
+    execução de um job exige o pipeline.
+    """
+    try:
+        from services.sifen_executor import emitir_job
+    except Exception as e:  # noqa: BLE001
+        raise ExecutorIndisponivel(
+            f"Este PC no tiene el módulo de emisión instalado ({e})") from e
+    return emitir_job(job, on_fase)
+
+
+def _cancel_lazy(job: dict) -> dict:
+    """Mesma ideia do `_executor_lazy`, para a cancelación fiscal."""
+    try:
+        from services.sifen_executor import cancelar_job
+    except Exception as e:  # noqa: BLE001
+        raise ExecutorIndisponivel(
+            f"Este PC no tiene el módulo de emisión instalado ({e})") from e
+    return cancelar_job(job)
+
+
 def get_coordinator() -> "SifenCoordinator":
-    """Coordenador com o executor real (emissão local). Lazy p/ evitar ciclo de import."""
+    """
+    Coordenador deste PC. NÃO importa o pipeline aqui de propósito — ver
+    `_executor_lazy`. Assim o dispositivo se anuncia mesmo sem o adapter.
+    """
     global _instance
     if _instance is None:
-        from services.sifen_executor import cancelar_job, emitir_job
-        _instance = SifenCoordinator(emitir_job, cancel_executor=cancelar_job)
+        _instance = SifenCoordinator(_executor_lazy, cancel_executor=_cancel_lazy)
     return _instance
