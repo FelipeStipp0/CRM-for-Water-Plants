@@ -37,6 +37,15 @@ from services.auth_service import auth_service
 from services.settings_service import settings_service
 
 
+# O Modo Caja arrasta os módulos de que precisa (ver SCOPES_IMPLICITOS no backend).
+# Sem este aviso o master marca só «Modo Caja» e o cajero toma 403 no atendimento —
+# ou marca tudo por precaução, dando ao cajero acesso que ele não deveria ter.
+SCOPE_CAJA_HINT = (
+    "«Modo Caja» ya incluye lo que el cajero necesita (clientes, pagos, lecturas, "
+    "corte y facturación electrónica). No hace falta marcar esos módulos aparte."
+)
+
+
 def get_system_printers() -> List[str]:
     """Return available local/connected printers on Windows."""
     try:
@@ -1046,13 +1055,16 @@ class SettingsView(ft.Container):
         label = ft.Text("Módulos de acceso (para operadores):",
                         color=COLORS["text_secondary"], size=12,
                         visible=role_dd.value == "operator")
+        hint = ft.Text(SCOPE_CAJA_HINT, color=COLORS["text_muted"], size=11,
+                       visible=role_dd.value == "operator")
         aviso = ft.Text("", size=12, color=COLORS["accent_error"])
 
         def on_role(ev):
             é_op = role_dd.value == "operator"
-            label.visible = box.visible = é_op
+            label.visible = box.visible = hint.visible = é_op
             self._safe_update(label)
             self._safe_update(box)
+            self._safe_update(hint)
 
         role_dd.on_change = on_role
 
@@ -1086,7 +1098,7 @@ class SettingsView(ft.Container):
             content=ft.Column([
                 ft.Row([full_name, role_dd], spacing=10),
                 ft.Row([email_field, position], spacing=10),
-                label, box, aviso,
+                label, box, hint, aviso,
             ], spacing=12, tight=True, scroll=ft.ScrollMode.AUTO),
             actions=[
                 ModalAction(t("common.cancel"), on_click=lambda ev: modal.close()),
@@ -1157,13 +1169,16 @@ class SettingsView(ft.Container):
             run_spacing=4,
         )
         scopes_label = ft.Text("Módulos de acceso (para operadores):", color=COLORS["text_secondary"], size=12)
+        scopes_hint = ft.Text(SCOPE_CAJA_HINT, color=COLORS["text_muted"], size=11)
 
         def on_role_change(ev):
             is_op = role_dd.value == "operator"
             scopes_label.visible = is_op
             scopes_container.visible = is_op
+            scopes_hint.visible = is_op
             self._safe_update(scopes_label)
             self._safe_update(scopes_container)
+            self._safe_update(scopes_hint)
 
         role_dd.on_change = on_role_change
 
@@ -1237,6 +1252,7 @@ class SettingsView(ft.Container):
                     ft.Text("La contraseña es temporal — el usuario deberá cambiarla al ingresar.", size=11, color=COLORS["text_muted"]),
                     scopes_label,
                     scopes_container,
+                    scopes_hint,
                     error_text,
                 ],
                 spacing=8,

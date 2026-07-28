@@ -192,3 +192,44 @@ async def test_user_without_scope_is_blocked_from_module(test_client: AsyncClien
     response = await test_client.get("/clients/", headers=headers)
     assert response.status_code == 403
     assert "Permissao insuficiente" in response.json()["detail"]
+
+
+def test_escopos_efetivos_expande_caja():
+    """Unitário (sem DB): «caja» arrasta os módulos do atendimento, e só eles."""
+    from app.routers.auth import escopos_efetivos
+
+    efetivos = escopos_efetivos(["caja"])
+    assert {"caja", "clients", "payments", "readings", "cutoff", "sifen"} <= efetivos
+    assert "finance" not in efetivos
+    assert "invoices" not in efetivos  # geração de faturas não é do cajero
+    assert escopos_efetivos(["readings"]) == {"readings"}
+
+
+@pytest.mark.asyncio
+async def test_caja_scope_grants_modules_the_cajero_needs(test_client: AsyncClient, test_db):
+    """
+    Só «caja» tem que bastar: o Modo Caja busca cliente, cobra, imprime recibo e
+    reativa. Se o master tivesse que marcar cinco módulos extras, o cajero levaria
+    403 no meio do atendimento — foi o que quebrou o modo na prática.
+    """
+    user = User(
+        username="cajera",
+        email="cajera@example.com",
+        hashed_password=get_password_hash("cajapass123"),
+        full_name="Cajera",
+        is_superuser=False,
+        must_change_password=False,
+        scopes=["caja"],
+    )
+    await user.insert()
+
+    token = create_access_token(data={"sub": user.username})
+    headers = {"Authorization": f"Bearer {token}"}
+
+    for url in ("/clients/", "/payments/", "/readings/"):
+        response = await test_client.get(url, headers=headers)
+        assert response.status_code != 403, f"{url} bloqueado para o escopo caja"
+
+    # ... mas «caja» não é curinga: o cajero segue fora de Finanzas.
+    negado = await test_client.get("/finance/expenses", headers=headers)
+    assert negado.status_code == 403

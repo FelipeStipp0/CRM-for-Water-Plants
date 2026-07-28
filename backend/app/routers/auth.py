@@ -94,6 +94,25 @@ async def get_current_master(
     return current_user
 
 
+# Escopos que arrastam outros: conceder o escopo "pai" já libera tudo o que aquele
+# modo de trabalho precisa para funcionar. O Modo Caja é um app inteiro (busca de
+# cliente, cobro, recibo, histórico, reativação, factura electrónica) — exigir que
+# o master marque cinco caixinhas extras só faz o cajero tomar 403 no meio do
+# atendimento. Isto NÃO é gravado no usuário: `user.scopes` continua ["caja"], que
+# é o que o frontend usa para decidir o boot em tela cheia.
+SCOPES_IMPLICITOS: dict[str, tuple[str, ...]] = {
+    "caja": ("clients", "payments", "readings", "cutoff", "sifen"),
+}
+
+
+def escopos_efetivos(scopes: list[str]) -> set[str]:
+    """Expande os escopos do usuario com os que eles arrastam."""
+    efetivos = set(scopes)
+    for scope in scopes:
+        efetivos.update(SCOPES_IMPLICITOS.get(scope, ()))
+    return efetivos
+
+
 def require_scopes(*required_scopes: str) -> Callable:
     """
     Cria dependencia que exige pelo menos um dos escopos informados.
@@ -105,7 +124,8 @@ def require_scopes(*required_scopes: str) -> Callable:
         if current_user.role == "master" or "*" in current_user.scopes:
             return current_user
 
-        if any(scope in current_user.scopes for scope in required_scopes):
+        concedidos = escopos_efetivos(current_user.scopes)
+        if any(scope in concedidos for scope in required_scopes):
             return current_user
 
         raise HTTPException(
