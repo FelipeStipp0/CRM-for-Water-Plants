@@ -106,6 +106,64 @@ def _dv_int(v) -> Optional[int]:
     return int(v) if v is not None and str(v).isdigit() else None
 
 
+def dv_calculado(base: str) -> Optional[int]:
+    """
+    Dígito verificador do RUC (módulo 11, regra SET). None se `base` não for numérica.
+
+    Serve para decidir com segurança se o último dígito de um número digitado sem
+    hífen é DV ou parte do documento.
+    """
+    num = _solo_digitos(base)
+    if not num:
+        return None
+    total, k = 0, 2
+    for ch in reversed(num):
+        total += int(ch) * k
+        k = 2 if k >= 11 else k + 1
+    resto = total % 11
+    return 11 - resto if resto > 1 else 0
+
+
+def separar_dv(doc: str) -> tuple[str, Optional[int]]:
+    """
+    Separa `documento` de `dígito verificador`.
+
+    O padrón do DNIT é indexado pelo RUC **sem DV**, mas o cadastro guarda o que o
+    operador digitou — quase sempre `80012345-6`. Colar o DV no número (o que um
+    `só dígitos` faz) nunca encontra o contribuyente: a factura saía como CI, sem
+    DV, para quem tem RUC ativo.
+
+    - Com hífen: intenção explícita, separa direto.
+    - Sem hífen: só separa se o último dígito **for** o DV do restante (módulo 11)
+      e o número for longo o bastante para ser RUC+DV. Para CI (7-8 dígitos) não
+      se mexe: em pessoa física o RUC É a cédula, então a busca direta é a certa —
+      e chutar aqui acharia o RUC de OUTRA pessoa.
+    """
+    bruto = (doc or "").strip()
+    if "-" in bruto:
+        base, _, resto = bruto.partition("-")
+        return _solo_digitos(base), _dv_int(_solo_digitos(resto))
+    return _solo_digitos(bruto), None
+
+
+def candidatos_consulta(num: str) -> list[str]:
+    """
+    Números a consultar no padrón, na ordem: o inteiro primeiro.
+
+    Sem hífen o DV é ambíguo — `10000003` tanto pode ser uma cédula de 8 dígitos
+    quanto o RUC `1000000` com DV `3`. Consultar o número inteiro antes evita
+    quebrar quem é achado direto; a variante sem o último dígito só entra depois,
+    e só se esse dígito **for** o DV do restante (módulo 11), o que corta 10 de
+    cada 11 coincidências. Quem confere o resultado é o operador, na tela de
+    confirmação, onde aparece o nome vindo do padrón.
+    """
+    num = _solo_digitos(num)
+    saida = [num] if num else []
+    if len(num) >= 8 and dv_calculado(num[:-1]) == int(num[-1]):
+        saida.append(num[:-1])
+    return saida
+
+
 def resolver_receptor(
     provider,
     doc: str,
@@ -128,16 +186,20 @@ def resolver_receptor(
 
     `provider` cumpre SifenProvider (login já feito). `email` sobrescreve o do cadastro.
     """
-    num = _solo_digitos(doc)
+    # O que o operador digitou pode trazer o DV (`80012345-6`); o padrón é indexado
+    # sem ele. `num` é o documento para consulta; `dv_informado` é o do cadastro.
+    num, dv_informado = separar_dv(doc)
 
     # 1) contribuyente (RUC ACTIVO) — preferir o registro DNIT local
     if ruc_lookup is not None:
-        r = ruc_lookup(num) or {}
-        if r.get("es_contribuyente"):
-            return build_receptor(
-                True, num, (r.get("nombre") or nombre or "").strip(),
-                email=email, dv=_dv_int(r.get("dv")),
-            )
+        for cand in candidatos_consulta(num):
+            r = ruc_lookup(cand) or {}
+            if r.get("es_contribuyente"):
+                return build_receptor(
+                    True, cand, (r.get("nombre") or nombre or "").strip(),
+                    email=email,
+                    dv=_dv_int(r.get("dv")) if r.get("dv") is not None else dv_informado,
+                )
         # achou porém cancelado/suspenso, ou não achou → no contribuyente (abaixo)
     else:
         gd = provider.contribuyente(num)
@@ -145,7 +207,7 @@ def resolver_receptor(
             return build_receptor(
                 True, num, gd.get("razonSocial") or "",
                 email=(gd.get("correoElectronico") or email),
-                dv=_dv_int(gd.get("dv")),
+                dv=_dv_int(gd.get("dv")) if gd.get("dv") is not None else dv_informado,
             )
 
     # 2) no contribuyente — nome do cadastro, senão portal, senão innominado

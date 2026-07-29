@@ -196,3 +196,82 @@ def test_build_dte_bate_com_caso_real():
     assert tot["dTotOpe"] == 240000
     assert tot["dTotGralOpe"] == 240000
     assert tot["dRedon"] == 0
+
+
+# ---------- documento do receptor: RUC com DV ----------
+
+@pytest.mark.parametrize("digitado,base,dv", [
+    ("80012345-6", "80012345", 6),   # formato canônico do cadastro
+    ("80012345 - 6", "80012345", 6),  # com espaços, como o operador digita
+    ("1000000-3", "1000000", 3),     # persona física (RUC = CI)
+    ("1000000", "1000000", None),    # CI pura: nada a separar
+    ("4123456", "4123456", None),    # CI de 7 díg. NÃO vira base+DV (pescaria alheia)
+])
+def test_separar_dv(digitado, base, dv):
+    assert receptor.separar_dv(digitado) == (base, dv)
+
+
+def test_dv_calculado_modulo11():
+    # DV real do padrón: RUC 1000000 -> 3
+    assert receptor.dv_calculado("1000000") == 3
+    assert receptor.dv_calculado("") is None
+
+
+def test_ruc_con_dv_resuelve_como_contribuyente():
+    """
+    Regressão: `80012345-6` era consultado como `800123456` (DV colado), não achava
+    ninguém no padrón e a factura saía como CI, sem DV, para quem tem RUC ACTIVO.
+    """
+    consultado = {}
+
+    def fake_lookup(doc):
+        consultado["doc"] = doc
+        return {"found": True, "estado": "ACTIVO", "es_contribuyente": True,
+                "nombre": "EMPRESA SA", "dv": 6}
+
+    rec = receptor.resolver_receptor(None, "80012345-6", ruc_lookup=fake_lookup)
+
+    assert consultado["doc"] == "80012345"   # consultou SEM o DV
+    assert rec["iNatRec"] == 1               # contribuyente, não CI
+    assert rec["dRucRec"] == "80012345"
+    assert rec["dDvRec"] == 6                # DV foi junto
+    assert rec["dNomRec"] == "EMPRESA SA"
+
+
+def test_ruc_inactivo_con_dv_cae_a_no_contribuyente_sin_dv():
+    """RUC cancelado/suspenso → CI sem DV (a regra 'solo ACTIVO' segue valendo)."""
+    rec = receptor.resolver_receptor(
+        None, "80012345-6", nombre="Juan Perez",
+        ruc_lookup=lambda d: {"found": True, "estado": "CANCELADO",
+                              "es_contribuyente": False, "nombre": None, "dv": 6},
+    )
+    assert rec["iNatRec"] == 2
+    assert rec["dNumIDRec"] == "80012345"
+    assert "dDvRec" not in rec
+
+
+def test_candidatos_tenta_numero_inteiro_primeiro():
+    """
+    Sem hífen o DV é ambíguo. O inteiro vem primeiro (senão uma CI de 8 dígitos
+    que existe no padrón deixaria de ser achada) e a variante sem DV só entra
+    quando o último dígito confere pelo módulo 11.
+    """
+    assert receptor.candidatos_consulta("10000003") == ["10000003", "1000000"]
+    assert receptor.candidatos_consulta("10000009") == ["10000009"]   # DV não confere
+    assert receptor.candidatos_consulta("4123456") == ["4123456"]     # CI curta: intocada
+    assert receptor.candidatos_consulta("") == []
+
+
+def test_ruc_pegado_sin_guion_resuelve_como_contribuyente():
+    """`10000003` = RUC 1000000 + DV 3 digitado sem hífen."""
+    vistos = []
+
+    def fake_lookup(doc):
+        vistos.append(doc)
+        if doc == "1000000":
+            return {"es_contribuyente": True, "nombre": "JUANA", "dv": 3}
+        return {"es_contribuyente": False}
+
+    rec = receptor.resolver_receptor(None, "10000003", ruc_lookup=fake_lookup)
+    assert vistos == ["10000003", "1000000"]   # inteiro primeiro
+    assert rec["iNatRec"] == 1 and rec["dRucRec"] == "1000000" and rec["dDvRec"] == 3
