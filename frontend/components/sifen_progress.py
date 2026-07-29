@@ -217,8 +217,7 @@ def imprimir_kude(emission_id: str, pdf: bytes | None = None) -> None:
 
 def open_sifen_progress(page: ft.Page, show_snackbar, *, emission_id: str,
                         receptor: str | None = None, on_done=None,
-                        con_kude: bool = True,
-                        cerrar_luego: AppModal | None = None) -> AppModal:
+                        con_kude: bool = True) -> AppModal:
     """
     Abre a tela de progresso de uma emissão já enfileirada.
 
@@ -226,8 +225,7 @@ def open_sifen_progress(page: ft.Page, show_snackbar, *, emission_id: str,
     `receptor`    — nome/documento de quem recebe (subtítulo).
     `on_done`     — chamado com a emissão final quando ela fecha (qualquer status).
     `con_kude`    — inclui gerar+imprimir o KuDE nesta máquina.
-    `cerrar_luego` — modal de onde viemos (a conferência da caja). Passe-o em vez
-                    de fechá-lo antes: ele é fechado depois, já coberto por este.
+    Se a tela anterior for um modal, feche-o ANTES de chamar isto.
     """
     pasos_def = PASOS if con_kude else PASOS[:3]
     pasos = {key: _Paso(label) for key, label in pasos_def}
@@ -519,23 +517,6 @@ def open_sifen_progress(page: ft.Page, show_snackbar, *, emission_id: str,
                      width_pct=0.42)
     modal.open()
     _modal.append(modal)
-
-    # Ordem importa. O modal de onde viemos (a conferência da caja) só é fechado
-    # DEPOIS que este já está por cima, e não antes:
-    #  - fechar antes e abrir em seguida deixa os dois empilhados no Flet e o
-    #    cliente segue desenhando o ANTIGO (o progresso "não atualizava" porque
-    #    nem estava sendo mostrado — só aparecia ao minimizar e restaurar);
-    #  - trocar o conteúdo do MESMO dialog (`replace`) mostra a troca, mas os
-    #    patches seguintes não repintam mais: a tela congela no primeiro quadro.
-    # Fechá-lo já escondido atrás deste evita os dois casos. Medido em 2026-07-29.
-    if cerrar_luego is not None:
-        def _fechar_anterior():
-            time.sleep(1.5)
-            try:
-                cerrar_luego.close()
-            except Exception as ex:  # noqa: BLE001
-                print(f"[SIFEN] cerrar_anterior_failed err={ex}")
-        _bg(page, _fechar_anterior)
     _bg(page, _cargar_contexto)
     _bg(page, _worker)
     return modal
