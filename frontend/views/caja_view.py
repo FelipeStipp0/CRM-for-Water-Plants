@@ -1328,15 +1328,9 @@ class CajaView(ft.Container):
             self._bg(lambda: self._do_confirm_recibo(payload))
             return
 
-        # Factura legal: se faltar dado do receptor, confere antes (na thread da UI).
-        items = self._build_factura_items()
-        if self._needs_conferencia(client):
-            self._open_conferencia(client, payload, items)
-        else:
-            self.confirm_btn.disabled = True
-            self._u(self.confirm_btn)
-            self._bg(lambda: self._do_confirm_factura(
-                payload, items, client.get("ci_ruc"), client.get("nombre_completo"), client.get("id")))
+        # Factura legal: SEMPRE confere antes (na thread da UI). Emitida errada, a
+        # única saída é cancelación no SET — conferir na tela é muito mais barato.
+        self._open_conferencia(client, payload, self._build_factura_items())
 
     def _do_confirm_recibo(self, payload: dict):
         try:
@@ -1388,27 +1382,126 @@ class CajaView(ft.Container):
         return re.match(r"^\d{5,10}(-\d)?$", doc) is None
 
     def _open_conferencia(self, client: dict, payload: dict, items: list):
+        """
+        Última conferência antes de emitir a factura legal.
+
+        Aparece sempre, não só quando falta dado: o KuDE é documento fiscal e, uma
+        vez emitido, só sai por cancelación no SET. O cajero vê o receptor e as
+        linhas que vão para o SET, e corrige o receptor aqui mesmo.
+
+        Editável é só o receptor. Os itens saem dos meses selecionados na grade e
+        o total tem de casar com o cobro que vai ser registrado — mexer no preço
+        aqui faria a factura divergir do recibo. Para mudar valores, fecha e muda
+        a seleção.
+        """
         client_id = client.get("id")
+        faltando = self._needs_conferencia(client)
+
         nombre_field = create_text_field("Nombre o razón social",
                                          value=client.get("nombre_completo") or "", width=None)
         doc_field = create_text_field("RUC / CI", value=client.get("ci_ruc") or "", width=None)
         err = ft.Text("", size=12, color=COLORS["accent_error"], visible=False)
 
+        aviso = ft.Text(
+            "Faltan datos o el documento es inválido. Corregilos para emitir la factura legal."
+            if faltando else
+            "Revisá antes de emitir: una vez emitida, la factura solo se anula por cancelación en el SET.",
+            size=13,
+            color=COLORS["accent_warning"] if faltando else COLORS["text_secondary"],
+        )
+
+        # Como o documento VAI SAIR na factura. Sem isto, um RUC activo emitido
+        # como CI (sem DV) só aparecia depois, no KuDE — e aí já era documento
+        # fiscal. A consulta é a mesma que a emissão faz, então o que se lê aqui
+        # é o que sai.
+        natureza = ft.Text("", size=12, color=COLORS["text_muted"])
+
+        def _checar_documento(_=None):
+            doc_atual = (doc_field.value or "").strip()
+            if not doc_atual:
+                natureza.value = ""
+                natureza.color = COLORS["text_muted"]
+                self._u(natureza)
+                return
+            natureza.value = "Consultando el padrón…"
+            natureza.color = COLORS["text_muted"]
+            self._u(natureza)
+
+            def work():
+                try:
+                    r = sifen_service.ruc_lookup(doc_atual) or {}
+                except Exception as ex:  # noqa: BLE001 — preview não bloqueia a emissão
+                    print(f"[Caja] ruc_lookup_failed err={ex}")
+                    natureza.value = "No se pudo consultar el padrón (se emitirá igual)."
+                    natureza.color = COLORS["text_muted"]
+                    self._u(natureza)
+                    return
+                if r.get("es_contribuyente"):
+                    dv = r.get("dv")
+                    natureza.value = (f"✓ RUC activo {r.get('ruc')}"
+                                      + (f"-{dv}" if dv is not None else "")
+                                      + f" · {r.get('nombre') or '—'} — se emitirá como contribuyente")
+                    natureza.color = COLORS["accent_success"]
+                elif r.get("found"):
+                    natureza.value = (f"RUC {r.get('ruc')} está {r.get('estado')} — "
+                                      "se emitirá como CI (sin DV)")
+                    natureza.color = COLORS["accent_warning"]
+                else:
+                    natureza.value = "Sin RUC en el padrón — se emitirá como CI"
+                    natureza.color = COLORS["text_muted"]
+                self._u(natureza)
+
+            self._bg(work)
+
+        doc_field.on_blur = _checar_documento
+
+        def _linha(it: dict) -> ft.Control:
+            total_linha = int(it.get("cantidad", 1) or 1) * int(it.get("precio_unit", 0) or 0)
+            return ft.Row([
+                ft.Text(it.get("descripcion") or "—", size=12,
+                        color=COLORS["text_secondary"], expand=True),
+                ft.Text(_money(total_linha), size=12, weight=ft.FontWeight.W_600,
+                        color=COLORS["text_primary"]),
+            ], spacing=10)
+
+        total_items = sum(int(i.get("cantidad", 1) or 1) * int(i.get("precio_unit", 0) or 0)
+                          for i in items)
+        detalle = ft.Container(
+            content=ft.Column(
+                [ft.Text("Detalle de la factura", size=12, weight=ft.FontWeight.W_600,
+                         color=COLORS["text_muted"])]
+                + [_linha(i) for i in items]
+                + [ft.Divider(height=1, color=COLORS["border"]),
+                   ft.Row([
+                       ft.Text("Total", size=13, weight=ft.FontWeight.W_700,
+                               color=COLORS["text_primary"], expand=True),
+                       ft.Text(_money(total_items), size=14, weight=ft.FontWeight.W_700,
+                               color=COLORS["accent_primary"]),
+                   ], spacing=10)],
+                spacing=6, tight=True,
+            ),
+            padding=12,
+            border_radius=RADIUS["md"],
+            bgcolor=COLORS["bg_elevated"],
+        )
+
         modal = AppModal(
             page=self.page,
             title="Confirmá los datos de la factura",
             content=ft.Column([
-                ft.Text("Faltan datos o el documento es inválido. Corregilos para emitir la factura legal.",
-                        size=13, color=COLORS["accent_warning"]),
-                nombre_field, doc_field, err,
+                aviso,
+                nombre_field, doc_field, natureza, err,
                 ft.Text("Lo que edites acá se guarda en la ficha del cliente.",
                         size=12, color=COLORS["text_muted"]),
-            ], spacing=12, tight=True),
+                detalle,
+                ft.Text("Para cambiar montos, cerrá y ajustá los meses seleccionados.",
+                        size=11, color=COLORS["text_muted"]),
+            ], spacing=12, tight=True, scroll=ft.ScrollMode.AUTO),
             actions=[
                 ModalAction(t("common.cancel"), on_click=lambda e: modal.close()),
-                ModalAction("Guardar y emitir", primary=True, on_click=lambda e: _save_and_emit()),
+                ModalAction("Emitir factura", primary=True, on_click=lambda e: _save_and_emit()),
             ],
-            width_pct=0.4,
+            width_pct=0.45,
         )
 
         def _save_and_emit():
@@ -1419,27 +1512,39 @@ class CajaView(ft.Container):
                 err.visible = True
                 self._u(err)
                 return
+            if not items:
+                err.value = "No hay ítems para facturar."
+                err.visible = True
+                self._u(err)
+                return
+            mudou = (new_nombre != (client.get("nombre_completo") or "").strip()
+                     or new_doc != (client.get("ci_ruc") or "").strip())
             modal.close()
             self.confirm_btn.disabled = True
             self._u(self.confirm_btn)
 
             def work():
-                try:
-                    client_service.update(client_id, {"nombre_completo": new_nombre, "ci_ruc": new_doc})
-                except APIError as ex:
-                    self.confirm_btn.disabled = False
-                    self._u(self.confirm_btn)
-                    self.show_snackbar(friendly_error(ex), error=True)
-                    return
-                # reflete a edição no contexto local
-                if self._ctx and self._ctx.get("client"):
-                    self._ctx["client"]["nombre_completo"] = new_nombre
-                    self._ctx["client"]["ci_ruc"] = new_doc
+                # Só grava se o cajero realmente editou — confirmar a factura não
+                # é motivo para escrever na ficha do cliente.
+                if mudou:
+                    try:
+                        client_service.update(
+                            client_id, {"nombre_completo": new_nombre, "ci_ruc": new_doc})
+                    except APIError as ex:
+                        self.confirm_btn.disabled = False
+                        self._u(self.confirm_btn)
+                        self.show_snackbar(friendly_error(ex), error=True)
+                        return
+                    # reflete a edição no contexto local
+                    if self._ctx and self._ctx.get("client"):
+                        self._ctx["client"]["nombre_completo"] = new_nombre
+                        self._ctx["client"]["ci_ruc"] = new_doc
                 self._do_confirm_factura(payload, items, new_doc, new_nombre, client_id)
 
             self._bg(work)
 
         modal.open()
+        _checar_documento()   # já mostra a natureza do documento ao abrir
 
     def _do_confirm_factura(self, payload: dict, items: list, doc: str, nombre: str, client_id: str):
         # 1. registra o cobro

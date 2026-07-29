@@ -1,5 +1,5 @@
 #define MyAppName "Saneo"
-#define MyAppVersion "1.1.3"
+#define MyAppVersion "1.1.5"
 #define MyAppPublisher "junta"
 #define MyAppExeName "junta.exe"
 #define MyAppGuid "{{D8A0D037-BE70-4524-9F54-6C96D1B63FC6}}"
