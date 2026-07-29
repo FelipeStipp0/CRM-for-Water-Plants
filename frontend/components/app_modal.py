@@ -155,6 +155,19 @@ class AppModal:
         dialog.open = False
         dialog.update()
 
+    def update(self) -> None:
+        """Repinta o dialog inteiro (título, conteúdo, ações).
+
+        Existe porque quem segura um AppModal segura um objeto Python, não um
+        controle Flet: sem isto, `modal.update()` levantava AttributeError, e como
+        as telas chamam isso dentro de try/except a atualização virava no-op
+        silencioso (foi o que travou o progresso da emissão SIFEN). Atualizar o
+        dialog basta: o digest do pai inclui os filhos não isolados.
+        """
+        dialog = self._dialog
+        if dialog is not None and dialog.open:
+            dialog.update()
+
     def update_content(self, new_content: ft.Control) -> None:
         """Substitui o conteúdo sem reconstruir o overlay/dialog inteiro."""
         self._content = new_content
