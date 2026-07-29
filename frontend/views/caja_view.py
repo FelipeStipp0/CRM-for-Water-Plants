@@ -1519,7 +1519,7 @@ class CajaView(ft.Container):
                 return
             mudou = (new_nombre != (client.get("nombre_completo") or "").strip()
                      or new_doc != (client.get("ci_ruc") or "").strip())
-            modal.close()
+            # NÃO fecha: este modal vira a tela de progresso (AppModal.replace).
             self.confirm_btn.disabled = True
             self._u(self.confirm_btn)
 
@@ -1531,6 +1531,7 @@ class CajaView(ft.Container):
                         client_service.update(
                             client_id, {"nombre_completo": new_nombre, "ci_ruc": new_doc})
                     except APIError as ex:
+                        modal.close()  # não vai virar progresso: some da tela
                         self.confirm_btn.disabled = False
                         self._u(self.confirm_btn)
                         self.show_snackbar(friendly_error(ex), error=True)
@@ -1539,18 +1540,31 @@ class CajaView(ft.Container):
                     if self._ctx and self._ctx.get("client"):
                         self._ctx["client"]["nombre_completo"] = new_nombre
                         self._ctx["client"]["ci_ruc"] = new_doc
-                self._do_confirm_factura(payload, items, new_doc, new_nombre, client_id)
+                self._do_confirm_factura(payload, items, new_doc, new_nombre, client_id,
+                                         conferencia=modal)
 
             self._bg(work)
 
         modal.open()
         _checar_documento()   # já mostra a natureza do documento ao abrir
 
-    def _do_confirm_factura(self, payload: dict, items: list, doc: str, nombre: str, client_id: str):
+    def _do_confirm_factura(self, payload: dict, items: list, doc: str, nombre: str,
+                            client_id: str, conferencia=None):
+        """`conferencia` é o modal de conferência, que VIRA a tela de progresso.
+
+        Ele chega aberto de propósito: fechar um dialog e abrir outro deixa os
+        dois empilhados no Flet e o cliente continua desenhando o antigo (ver
+        `AppModal.replace`). Em qualquer saída que não seja o progresso, fecha.
+        """
+        def fechar_conferencia():
+            if conferencia is not None:
+                conferencia.close()
+
         # 1. registra o cobro
         try:
             result = payment_service.create(payload)
         except APIError as err:
+            fechar_conferencia()
             self.confirm_btn.disabled = False
             self._u(self.confirm_btn)
             self.show_snackbar(friendly_error(err), error=True)
@@ -1569,6 +1583,7 @@ class CajaView(ft.Container):
                 nombre=nombre, client_id=client_id, payment_id=payment_id,
             )
         except APIError as err:
+            fechar_conferencia()
             self.show_snackbar(
                 f"Cobro registrado, pero la factura no se pudo encolar: {friendly_error(err)}",
                 error=True)
@@ -1581,8 +1596,10 @@ class CajaView(ft.Container):
         self._reset()
         if emission_id:
             open_sifen_progress(self.page, self.show_snackbar, emission_id=emission_id,
-                                receptor=f"{nombre or '-'} · {doc}")
+                                receptor=f"{nombre or '-'} · {doc}",
+                                cerrar_luego=conferencia)
         else:
+            fechar_conferencia()
             self.show_snackbar("✓ Cobro registrado · factura en cola")
 
     def _reset(self):

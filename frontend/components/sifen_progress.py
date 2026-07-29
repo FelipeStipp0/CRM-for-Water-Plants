@@ -217,7 +217,8 @@ def imprimir_kude(emission_id: str, pdf: bytes | None = None) -> None:
 
 def open_sifen_progress(page: ft.Page, show_snackbar, *, emission_id: str,
                         receptor: str | None = None, on_done=None,
-                        con_kude: bool = True) -> AppModal:
+                        con_kude: bool = True,
+                        cerrar_luego: AppModal | None = None) -> AppModal:
     """
     Abre a tela de progresso de uma emissão já enfileirada.
 
@@ -225,6 +226,8 @@ def open_sifen_progress(page: ft.Page, show_snackbar, *, emission_id: str,
     `receptor`    — nome/documento de quem recebe (subtítulo).
     `on_done`     — chamado com a emissão final quando ela fecha (qualquer status).
     `con_kude`    — inclui gerar+imprimir o KuDE nesta máquina.
+    `cerrar_luego` — modal de onde viemos (a conferência da caja). Passe-o em vez
+                    de fechá-lo antes: ele é fechado depois, já coberto por este.
     """
     pasos_def = PASOS if con_kude else PASOS[:3]
     pasos = {key: _Paso(label) for key, label in pasos_def}
@@ -247,12 +250,22 @@ def open_sifen_progress(page: ft.Page, show_snackbar, *, emission_id: str,
     _modal: list[AppModal] = []
 
     def _u(ctrl=None):
-        # Falha aqui é esperada só quando a tela já fechou — mas engolir calado
-        # foi o que escondeu o progresso parado, então deixa rastro no log.
-        try:
-            (ctrl or _modal[0]).update()
-        except Exception as ex:  # noqa: BLE001
-            print(f"[SIFEN] progress_update_failed err={ex}")
+        """Repinta. Sem argumento, repinta cada controle vivo — não o dialog.
+
+        Pedir o repinte ao dialog (`modal.update()`) não funciona depois que o
+        conteúdo dele foi trocado: o patch sai vazio e a tela fica congelada,
+        que era o sintoma de "só atualiza se eu minimizar e restaurar". Patch
+        direto no controle montado funciona sempre. Falha aqui é esperada só
+        quando a tela já fechou — mas engolir calado foi o que escondeu o
+        progresso parado, então deixa rastro no log.
+        """
+        alvos = [ctrl] if ctrl is not None else [
+            titulo, subtitulo, contexto, mensaje, footer, *pasos.values()]
+        for alvo in alvos:
+            try:
+                alvo.update()
+            except Exception as ex:  # noqa: BLE001
+                print(f"[SIFEN] progress_update_failed ctrl={type(alvo).__name__} err={ex}")
 
     def _avisar(msg: str, error: bool = False):
         if not show_snackbar:
@@ -481,29 +494,48 @@ def open_sifen_progress(page: ft.Page, show_snackbar, *, emission_id: str,
                  ft.Text(f"Cerrar ({restante})", size=FONTS["size_sm"],
                          weight=ft.FontWeight.W_600, color="#FFFFFF")],
                 alignment=ft.MainAxisAlignment.CENTER, spacing=8, tight=True)
-            _u(cerrar_btn)
+            # Repinta o footer, não o botão: `cerrar_btn` nasce invisível e
+            # controle invisível não é montado na página — `cerrar_btn.update()`
+            # levantava "Control must be added to the page first" e a contagem
+            # (e o próprio botão «Cerrar») nunca apareciam.
+            _u(footer)
             time.sleep(1)
         _cerrar()
 
-    modal = AppModal(
-        page=page,
-        title="Factura electrónica",
-        content=ft.Column([
-            ft.Column([titulo, subtitulo, contexto], spacing=2, tight=True),
-            ft.Divider(height=1, color=COLORS["border"]),
-            ft.Container(
-                content=ft.Column(list(pasos.values()), spacing=14, tight=True),
-                padding=ft.Padding.symmetric(vertical=6),
-                border_radius=RADIUS["md"],
-            ),
-            ft.Divider(height=1, color=COLORS["border"]),
-            mensaje,
-            footer,
-        ], spacing=14, tight=True),
-        width_pct=0.42,
-    )
-    _modal.append(modal)
+    cuerpo = ft.Column([
+        ft.Column([titulo, subtitulo, contexto], spacing=2, tight=True),
+        ft.Divider(height=1, color=COLORS["border"]),
+        ft.Container(
+            content=ft.Column(list(pasos.values()), spacing=14, tight=True),
+            padding=ft.Padding.symmetric(vertical=6),
+            border_radius=RADIUS["md"],
+        ),
+        ft.Divider(height=1, color=COLORS["border"]),
+        mensaje,
+        footer,
+    ], spacing=14, tight=True)
+
+    modal = AppModal(page=page, title="Factura electrónica", content=cuerpo,
+                     width_pct=0.42)
     modal.open()
+    _modal.append(modal)
+
+    # Ordem importa. O modal de onde viemos (a conferência da caja) só é fechado
+    # DEPOIS que este já está por cima, e não antes:
+    #  - fechar antes e abrir em seguida deixa os dois empilhados no Flet e o
+    #    cliente segue desenhando o ANTIGO (o progresso "não atualizava" porque
+    #    nem estava sendo mostrado — só aparecia ao minimizar e restaurar);
+    #  - trocar o conteúdo do MESMO dialog (`replace`) mostra a troca, mas os
+    #    patches seguintes não repintam mais: a tela congela no primeiro quadro.
+    # Fechá-lo já escondido atrás deste evita os dois casos. Medido em 2026-07-29.
+    if cerrar_luego is not None:
+        def _fechar_anterior():
+            time.sleep(1.5)
+            try:
+                cerrar_luego.close()
+            except Exception as ex:  # noqa: BLE001
+                print(f"[SIFEN] cerrar_anterior_failed err={ex}")
+        _bg(page, _fechar_anterior)
     _bg(page, _cargar_contexto)
     _bg(page, _worker)
     return modal

@@ -147,6 +147,11 @@ class AppModal:
         self._page.show_dialog(self._dialog)
 
     def close(self) -> None:
+        """Fecha o dialog.
+
+        ⚠️ NÃO use ``close()`` seguido do ``open()`` de outro modal: veja
+        :meth:`replace`. Para virar uma tela em outra, é ``replace`` que serve.
+        """
         dialog = self._dialog
         if dialog is None or not dialog.open:
             return
@@ -174,3 +179,36 @@ class AppModal:
         if self._dialog is not None and self._dialog.open:
             self._dialog.content = self._build_content()
             self._dialog.update()
+
+    def replace(self, *, title: Optional[str] = None,
+                content: Optional[ft.Control] = None,
+                actions: Optional[list[ModalAction]] = None) -> bool:
+        """Troca título/conteúdo/ações do dialog JÁ ABERTO. True se conseguiu.
+
+        Existe para uma tela virar outra sem fechar um dialog e abrir outro.
+        Fechar e abrir em sequência não funciona: ``close()`` marca
+        ``open = False`` mas o dialog só sai de ``page._dialogs`` quando o
+        ``on_dismiss`` volta do cliente — e em fechamento programático ele não
+        volta. Os dois ficam empilhados e o cliente segue desenhando o ANTIGO;
+        o novo só aparece se algo forçar um rebuild (minimizar e restaurar a
+        janela). Tirar o antigo do stack na mão também não resolve: aí o Flutter
+        perde a rota e NENHUM dos dois aparece. Medido nos dois casos.
+
+        Mantendo o mesmo dialog não há stack para dessincronizar.
+        """
+        dialog = self._dialog
+        if dialog is None or not dialog.open:
+            return False
+        if title is not None:
+            self._title = title
+            dialog.title = ft.Text(title, size=FONTS["size_xl"],
+                                   weight=ft.FontWeight.W_600,
+                                   color=COLORS["text_primary"])
+        if content is not None:
+            self._content = content
+            dialog.content = self._build_content()
+        if actions is not None:
+            self._actions = actions
+            dialog.actions = [self._build_action(a) for a in actions]
+        dialog.update()
+        return True
