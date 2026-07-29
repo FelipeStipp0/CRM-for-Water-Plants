@@ -47,6 +47,54 @@ POLL_S = 1.0            # ritmo do polling (a emissão inteira leva ~7s)
 POLL_MAX_S = 180        # teto: acima disso a tela para de esperar (o job segue)
 AUTOCLOSE_S = 10        # contagem para fechar sozinho depois do sucesso
 
+# O XML normalmente já vem no fim da emissão, com a sessão do portal ainda viva
+# (é ela que libera a rota pública do SET — ver `adapter._abrir_janela`). Se não
+# veio, insistir aqui só ajuda enquanto essa janela durar: depois que a sessão
+# morre, o mesmo CDC volta a dar 401 por tempo indeterminado. Medido 2026-07-29:
+# documentos aprovados há semanas dão 401 sem sessão e 200 com ela. Por isso a
+# espera é curta — é uma segunda chance, não uma aposta na publicação.
+KUDE_ESPERA_S = 45      # teto de espera pelo XML (janela da sessão que emitiu)
+KUDE_INTERVALO_S = 5    # ritmo das tentativas
+
+
+def _bg(page: ft.Page, fn) -> None:
+    """
+    Roda `fn` em background NO executor da página.
+
+    `threading.Thread` cru não pertence à página: os `update()` feitos de lá não
+    chegavam ao cliente, e o progresso só aparecia quando o operador fechava e
+    reabria a janela (o que forçava um rebuild). É o mesmo `run_thread` que as
+    views usam.
+    """
+    try:
+        page.run_thread(fn)
+    except Exception:  # noqa: BLE001 — sem página utilizável, melhor thread solta que nada
+        threading.Thread(target=fn, daemon=True).start()
+
+
+def _mensaje_error(bruto: str | None) -> tuple[str, str]:
+    """
+    Traduz o erro técnico do job para algo que o cajero entenda.
+
+    Devolve (mensagem, detalhe): a mensagem vai grande na tela, o detalhe fica
+    pequeno embaixo — jogar `HTTPError: 401 Client Error` na cara de quem está
+    no balcão não ajuda ninguém, mas o técnico ainda precisa do texto original.
+    """
+    cru = (bruto or "").strip()
+    baixo = cru.lower()
+    if not cru:
+        return "No se pudo emitir la factura electrónica.", ""
+    if "401" in baixo and "xml" in baixo:
+        return ("La factura se emitió, pero el SET no entregó el documento firmado. "
+                "Reimprimí el KuDE desde «Facturación»."), cru
+    if any(p in baixo for p in ("connection", "timeout", "network", "getaddrinfo")):
+        return "Sin conexión con el portal del SET. Revisá internet y probá de nuevo.", cru
+    if "credenc" in baixo or "login" in baixo or "clave" in baixo:
+        return "El portal rechazó las credenciales. Revisalas en «Configuración».", cru
+    if "firma" in baixo or "sign" in baixo:
+        return "No se pudo firmar el documento. Nada llegó al SET.", cru
+    return "No se pudo emitir la factura electrónica.", cru
+
 
 class _Paso(ft.Row):
     """Uma linha da lista: ícone de estado + rótulo (+ detalhe opcional)."""
@@ -108,6 +156,31 @@ def _logo_cuadrada() -> bytes | None:
         return None
 
 
+def _baixar_xml(emission_id: str) -> bytes:
+    """
+    XML assinado: tenta o backend e, se ele não tiver, busca aqui mesmo.
+
+    O backend guarda o XML quando consegue, mas quem tem o adapter é ESTA máquina
+    (a que emitiu). Sem este fallback, um documento que o SET publicou tarde ficava
+    sem KuDE mesmo com o portal já servindo o XML.
+    """
+    try:
+        return sifen_service.get_emision_xml(emission_id)
+    except Exception as backend_err:  # noqa: BLE001
+        em = sifen_service.get_emision(emission_id) or {}
+        cdc = em.get("cdc")
+        if not cdc:
+            raise
+        try:
+            from services.sifen_adapter import build_provider
+        except Exception:  # noqa: BLE001 — PC sem pipeline: só resta o backend
+            raise backend_err
+        creds = sifen_service.get_credenciais()
+        prov = build_provider(creds["ruc"], creds["clave"], creds["pin"])
+        # 1 tentativa: quem insiste é o laço de espera, que dá feedback na tela.
+        return prov.baixar_xml(cdc, tries=1, delay=0)
+
+
 def generar_kude(emission_id: str) -> bytes:
     """
     Baixa o XML assinado e monta o KuDE no formato configurado. Levanta em falha.
@@ -118,7 +191,7 @@ def generar_kude(emission_id: str) -> bytes:
     """
     from services.pdf_generation.kude import KudeA4Generator, KudeP80Generator
 
-    xml = sifen_service.get_emision_xml(emission_id)
+    xml = _baixar_xml(emission_id)
     if _formato_kude() == "a4":
         pdf = KudeA4Generator().generate(xml, _logo_cuadrada())
     else:
@@ -174,10 +247,12 @@ def open_sifen_progress(page: ft.Page, show_snackbar, *, emission_id: str,
     _modal: list[AppModal] = []
 
     def _u(ctrl=None):
+        # Falha aqui é esperada só quando a tela já fechou — mas engolir calado
+        # foi o que escondeu o progresso parado, então deixa rastro no log.
         try:
             (ctrl or _modal[0]).update()
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: BLE001
+            print(f"[SIFEN] progress_update_failed err={ex}")
 
     def _avisar(msg: str, error: bool = False):
         if not show_snackbar:
@@ -208,7 +283,7 @@ def open_sifen_progress(page: ft.Page, show_snackbar, *, emission_id: str,
         mensaje.value = "Cancelando… (solo se puede antes de la firma)"
         mensaje.color = COLORS["text_secondary"]
         _u()
-        threading.Thread(target=_abort_worker, daemon=True).start()
+        _bg(page, _abort_worker)
 
     def _abort_worker():
         try:
@@ -309,11 +384,28 @@ def open_sifen_progress(page: ft.Page, show_snackbar, *, emission_id: str,
         pasos["KUDE"].activo()
         mensaje.value = "Generando la representación impresa…"
         _u()
-        try:
-            pdf = generar_kude(emission_id)
-        except Exception as ex:  # noqa: BLE001
-            _falla_kude("KUDE", ex)
+        # Segunda chance para o XML: a factura já está emitida, só falta o papel.
+        # Insistir com aviso na tela é melhor que mandar o cajero reimprimir.
+        limite = time.monotonic() + KUDE_ESPERA_S
+        pdf, ultimo_erro = None, None
+        while True:
+            try:
+                pdf = generar_kude(emission_id)
+                break
+            except Exception as ex:  # noqa: BLE001
+                ultimo_erro = ex
+                if time.monotonic() >= limite:
+                    break
+                espera = int(limite - time.monotonic())
+                pasos["KUDE"].detail.value = (
+                    f"El SET no entregó el XML — reintentando ({espera}s)")
+                mensaje.value = "Buscando el documento firmado en el SET…"
+                _u()
+                time.sleep(KUDE_INTERVALO_S)
+        if pdf is None:
+            _falla_kude("KUDE", ultimo_erro or RuntimeError("XML no disponible"))
             return
+        pasos["KUDE"].detail.value = ""
         pasos["KUDE"].hecho()
         pasos["IMPRIMIR"].activo()
         _u()
@@ -327,10 +419,10 @@ def open_sifen_progress(page: ft.Page, show_snackbar, *, emission_id: str,
 
     def _falla_kude(key: str, ex: Exception):
         pasos[key].fallido()
-        pasos[key].detail.value = str(ex)
+        pasos[key].detail.value = str(ex)[:120]
         if key == "KUDE":
             pasos["IMPRIMIR"].cancelado()
-        mensaje.value = ("Factura emitida, pero no se pudo imprimir el KuDE. "
+        mensaje.value = ("La factura SÍ se emitió, pero no se pudo imprimir el KuDE. "
                          "Reimprimila desde «Facturación».")
         mensaje.color = COLORS["accent_warning"]
         _u()
@@ -357,8 +449,11 @@ def open_sifen_progress(page: ft.Page, show_snackbar, *, emission_id: str,
         elif status == "FALHOU":
             titulo.value = "La factura no se emitió"
             titulo.color = COLORS["accent_error"]
-            mensaje.value = em.get("error") or "Error desconocido."
+            humano, detalhe = _mensaje_error(em.get("error"))
+            mensaje.value = humano
             mensaje.color = COLORS["accent_error"]
+            if detalhe:
+                contexto.value = detalhe[:160]
             _avisar("✗ La factura electrónica no se emitió.", error=True)
         else:
             titulo.value = "Sigue en proceso"
@@ -409,6 +504,6 @@ def open_sifen_progress(page: ft.Page, show_snackbar, *, emission_id: str,
     )
     _modal.append(modal)
     modal.open()
-    threading.Thread(target=_cargar_contexto, daemon=True).start()
-    threading.Thread(target=_worker, daemon=True).start()
+    _bg(page, _cargar_contexto)
+    _bg(page, _worker)
     return modal

@@ -111,9 +111,34 @@ def emitir_job(job: dict, on_fase=None) -> dict:
 
         if not timed("sign", lambda: prov.sign(g["url_proceso"])):
             raise EmissionFailed("firma falhou (breaker) — documento NÃO guardado")
-        on_fase("RECUPERAR")
         timed("guardar", lambda: prov.guardar(g["proceso_id"], g["documento_id"]))
-        xml = timed("xml", lambda: prov.baixar_xml(g["cdc"]))
+
+        # A partir daqui o documento EXISTE no SET. O XML assinado é só a fonte do
+        # KuDE — tratá-lo como pré-requisito marcava FALHOU uma factura emitida e
+        # válida, divergindo do SET. Tenta rápido; se não vier, devolve sucesso.
+        #
+        # Tem de ser AQUI, com a sessão ainda nossa: a rota pública do XML só
+        # serve os documentos de um RUC que tenha sessão viva e consulta feita
+        # (o `baixar_xml` faz a consulta). Fora da sessão, 401.
+        xml, pendente = None, None
+        try:
+            xml = timed("xml", lambda: prov.baixar_xml(g["cdc"], tries=3, delay=5.0))
+        except Exception as e:  # noqa: BLE001
+            pendente = f"{type(e).__name__}: {e}"
+
+        # Só agora libera a sessão no backend. Antes do `guardar` deixaria outra
+        # máquina logar no meio dele e derrubar a nossa (foi o que quebrou o PoC);
+        # antes do XML fecharia a janela da rota pública. Depois daqui só resta o
+        # KuDE, que é local — a fila anda enquanto o papel é montado.
+        on_fase("RECUPERAR")
+
+        if xml is None:
+            return {
+                "cdc": g["cdc"],
+                "xml_pendente": True,
+                "xml_pendente_motivo": pendente,
+                "phases_ms": phases,
+            }
         if b"dsig:Signature" not in xml or b"<dCarQR>" not in xml:
             raise EmissionFailed("XML sem assinatura/QR")
         return {

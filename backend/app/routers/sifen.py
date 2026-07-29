@@ -468,6 +468,15 @@ async def coordinator_fase(
     job.updated_at = job.fase_at
     if body.cdc:
         job.cdc = body.cdc
+
+    # O coordenador só reporta RECUPERAR depois de firmar, guardar E baixar o XML
+    # — o download precisa da sessão viva (a rota pública do SET só serve o RUC
+    # que tem sessão com consulta feita). Daqui em diante resta montar e imprimir
+    # o KuDE, que é local. Segurar a sessão até o fim fazia a próxima factura
+    # esperar pelo PAPEL da anterior; libera aqui.
+    if body.fase == EmissionFase.RECUPERAR and job.locked_by:
+        await sifen_queue.release_sessao(job.locked_by)
+
     await job.save()
     return EmissionOut.of(job)
 
