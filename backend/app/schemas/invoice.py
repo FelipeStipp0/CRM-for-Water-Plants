@@ -5,7 +5,7 @@ Schemas para faturas.
 from datetime import datetime, date
 from decimal import Decimal
 from typing import Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.invoice import InvoiceStatus, InvoiceType
 
@@ -15,6 +15,21 @@ class InvoiceItemCreate(BaseModel):
     descripcion: str = Field(min_length=1, max_length=200)
     cantidad: int = Field(ge=1, default=1)
     precio_unitario: Decimal = Field(ge=0)
+
+    # Facturacion electronica: IVA por item (o modelo InvoiceItem ja tem os
+    # campos). Sem eles aqui, toda AVULSA nascia com o default 10% gravado e a
+    # factura legal ignorava o IVA do produto do catalogo — e o cargo de valor
+    # livre do balcao nao teria como escolher exenta/5%.
+    # iva_afectacion: 1=Gravado, 2=Parcial, 3=Exento ; iva_tasa: 0/5/10
+    iva_afectacion: int = Field(ge=1, le=3, default=1)
+    iva_tasa: int = Field(default=10)
+
+    @field_validator("iva_tasa")
+    @classmethod
+    def _tasa_valida(cls, v: int) -> int:
+        if v not in (0, 5, 10):
+            raise ValueError("iva_tasa debe ser 0, 5 o 10")
+        return v
 
 
 class InvoiceCreate(BaseModel):
@@ -42,6 +57,8 @@ class InvoiceItemResponse(BaseModel):
     cantidad: int
     precio_unitario: Decimal
     subtotal: Decimal
+    iva_afectacion: int = 1
+    iva_tasa: int = 10
 
 
 class InvoiceResponse(BaseModel):

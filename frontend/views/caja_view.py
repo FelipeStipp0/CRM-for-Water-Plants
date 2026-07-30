@@ -10,7 +10,8 @@ cadastra, cobra, corrige, parcela e administra. Nenhum fluxo depende de "outra
 pessoa resolve depois", e por isso a tela tem tudo:
 
 - cadastro de cliente completo, aberto de dentro da cobrança (Fase 1);
-- otros cargos da tesouraria (faturas AVULSA) na mesma conta (Fase 2.1);
+- otros cargos da tesouraria (faturas AVULSA) na mesma conta (Fase 2.1), e o
+  cargo de **valor livre lançado no balcão** quando ninguém lançou antes;
 - cobro parcial: "valor a cobrar" separado de "recibí" (Fase 2.2);
 - acuerdo de pago / parcelamento (Fase 3);
 - anular cobro no próprio balcão, com motivo (Fase 4);
@@ -37,6 +38,7 @@ import flet as ft
 from components.app_modal import AppModal, ModalAction
 from components.caja_acuerdo import open_acuerdo_dialog
 from components.caja_atenciones import open_atenciones_dialog
+from components.caja_cargo import open_cargo_dialog
 from components.caja_efectivo import (
     REPOSICION, SANGRIA, open_movimiento_dialog, open_resumen_dialog,
 )
@@ -148,10 +150,25 @@ class CajaView(ft.Container):
         except Exception:
             pass
 
+    def _pagina(self):
+        """
+        A página, ou `None` se esta view não está (mais) na tela.
+
+        `self.page` **levanta** `RuntimeError` fora da árvore no Flet 0.86 — não
+        devolve `None`. Quem lia o atributo direto quebrava justamente no
+        caminho de saída (`stop()` no logout, chamado depois de a caja já ter
+        sido tirada da tela), e o logout morria no meio.
+        """
+        try:
+            return self.page
+        except Exception:
+            return None
+
     def _bg(self, fn):
-        if self.page:
+        page = self._pagina()
+        if page is not None:
             try:
-                self.page.run_thread(fn)
+                page.run_thread(fn)
                 return
             except Exception:
                 pass
@@ -166,11 +183,7 @@ class CajaView(ft.Container):
         balcão que trabalha por teclado quebra o ritmo inteiro. Quem agenda é a
         página, com `run_task`.
         """
-        page = None
-        try:
-            page = self.page
-        except Exception:
-            page = None
+        page = self._pagina()
         if page is None:
             return
         try:
@@ -178,15 +191,24 @@ class CajaView(ft.Container):
         except Exception as exc:  # noqa: BLE001
             print(f"[Caja] focus_failed err={exc}")
 
-    def _track(self, modal):
-        """Guarda o dialog para os atalhos saberem que há algo na frente."""
-        self._dialogs = [d for d in self._dialogs if getattr(d, "is_open", False)]
+    def _track(self, modal, esc_cierra: bool = True):
+        """
+        Guarda o dialog para os atalhos saberem que há algo na frente.
+
+        `esc_cierra=False` para telas que não podem ser largadas com um Esc
+        distraído (a emissão da factura legal é a única: fechá-la às cegas deixa
+        o cajero sem saber se o KuDE saiu).
+        """
+        self._podar_dialogs()
         if modal is not None:
-            self._dialogs.append(modal)
+            self._dialogs.append((modal, esc_cierra))
         return modal
 
+    def _podar_dialogs(self):
+        self._dialogs = [d for d in self._dialogs if getattr(d[0], "is_open", False)]
+
     def _sin_dialogs(self) -> bool:
-        self._dialogs = [d for d in self._dialogs if getattr(d, "is_open", False)]
+        self._podar_dialogs()
         return not self._dialogs
 
     def _get_company(self) -> dict:
@@ -255,6 +277,8 @@ class CajaView(ft.Container):
                          lambda: self._open_movimiento(REPOSICION)),
             self._accion(ft.Icons.PAUSE_CIRCLE_OUTLINE,
                          "Pausar el cobro sin cerrar la caja (F11)", self._pausar),
+            self._accion(ft.Icons.KEYBOARD_OUTLINED,
+                         "Atajos del teclado", self._open_atajos),
         ], spacing=2, visible=False)
 
         salida_btn = (
@@ -551,8 +575,8 @@ class CajaView(ft.Container):
         Com turno aberto, o X da janela não fecha o app — o dinheiro na gaveta
         precisa ser contado antes. Sem turno aberto, a janela volta ao normal.
         """
-        page = self.page
-        if not page:
+        page = self._pagina()
+        if page is None:
             return
         try:
             page.window.prevent_close = bool(abierta)
@@ -841,8 +865,8 @@ class CajaView(ft.Container):
         Não disparam com um dialog na frente — senão F5 abriria uma tela em cima
         da outra.
         """
-        page = self.page
-        if not page:
+        page = self._pagina()
+        if page is None:
             return
         try:
             self._prev_keyboard_handler = getattr(page, "on_keyboard_event", None)
@@ -851,16 +875,41 @@ class CajaView(ft.Container):
             print(f"[Caja] keyboard_hook_failed err={exc}")
 
     def _restore_keyboard(self):
-        page = self.page
-        if not page:
+        page = self._pagina()
+        if page is None:
             return
         try:
             page.on_keyboard_event = self._prev_keyboard_handler
         except Exception:
             pass
 
+    # Atalhos do turno, na ordem em que aparecem no painel de ajuda.
+    ATAJOS = [
+        ("F1", "Registrar cliente nuevo"),
+        ("F2", "Marcar todo lo que debe"),
+        ("F3", "Limpiar la selección"),
+        ("F4", "Plan de pagos (acuerdo)"),
+        ("F5", "Atenciones anteriores"),
+        ("F6", "Resumen del turno"),
+        ("F7", "Dejar en espera"),
+        ("F8", "Retomar el primero en espera"),
+        ("F9", "Sangría de la gaveta"),
+        ("F10", "Cerrar caja"),
+        ("F11", "Pausar la caja"),
+        ("F12", "Cargo nuevo (valor libre)"),
+        ("Enter", "Buscar → primer cliente → cobrar"),
+        ("Esc", "Volver un paso atrás"),
+    ]
+
     def _on_key(self, e):
         key = getattr(e, "key", "")
+        # Esc é o único que trabalha com dialog na frente: é ele que fecha.
+        if key == "Escape":
+            try:
+                self._escape()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[Caja] escape_failed err={exc}")
+            return
         if not self._sin_dialogs() or self._pausado:
             return
         if not self._sesion:
@@ -877,7 +926,7 @@ class CajaView(ft.Container):
             "F9": lambda: self._open_movimiento(SANGRIA),
             "F10": self._open_cierre,
             "F11": self._pausar,
-            "Escape": self._nuevo_atendimiento,
+            "F12": self._open_cargo,
         }
         fn = acciones.get(key)
         if not fn:
@@ -887,8 +936,93 @@ class CajaView(ft.Container):
         except Exception as exc:  # noqa: BLE001
             print(f"[Caja] shortcut_failed key={key} err={exc}")
 
+    # ------------------------------------------------------------- Esc
+    def _escape(self):
+        """
+        Esc é o «volver» do balcão: um passo atrás por vez, nunca dois.
+
+        A ordem importa. Antes, Esc só sabia largar o atendimento — e como os
+        dialogs deste app são `modal=True` (o barrier não dispensa), Esc com uma
+        tela aberta na frente não fazia nada: o cajero tinha de achar o
+        «Cancelar» com o mouse, o que num balcão que trabalha por teclado é o
+        passo que quebra o ritmo.
+
+        1. dialog na frente  → fecha o de cima (e só ele);
+        2. atendimento aberto → larga e volta o foco à busca;
+        3. busca digitada    → limpa a busca;
+        4. tela limpa        → devolve o cursor à busca.
+
+        Não sai da caja nem cancela um cobro já enviado: Esc é para desfazer o
+        que ainda é intenção, não o que já é dinheiro.
+        """
+        self._podar_dialogs()
+        if self._dialogs:
+            # O último aberto é o de cima. `page.pop_dialog()` fecha o topo real
+            # da pilha da página — inclusive um prompt aberto de dentro de outro
+            # dialog, que esta lista não conhece.
+            if not self._dialogs[-1][1]:
+                return
+            page = self._pagina()
+            try:
+                if page is not None:
+                    page.pop_dialog()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[Caja] esc_pop_dialog_failed err={exc}")
+            return
+
+        # A pausa só sai com a senha do cajero — Esc não é a porta dos fundos.
+        if self._pausado or not self._sesion:
+            return
+
+        if self._ctx:
+            self._nuevo_atendimiento()
+            return
+
+        if (self.search_field.value or "").strip():
+            self.search_field.value = ""
+            self._results = []
+            self._search_total = 0
+            self._render_results()
+            self._u(self.search_field)
+
+        self._focus(self.search_field)
+
+    def _open_atajos(self):
+        """Painel com os atalhos — o teclado do balcão precisa de onde ser lido."""
+        filas = [
+            ft.Row([
+                ft.Container(
+                    content=ft.Text(tecla, size=12, weight=ft.FontWeight.W_800,
+                                    color="#CFE4FF"),
+                    width=54, alignment=ft.Alignment.CENTER,
+                    padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                    bgcolor="#0B1834", border=ft.Border.all(1, "#24406E"),
+                    border_radius=RADIUS["sm"],
+                ),
+                ft.Text(texto, size=13, color=COLORS["text_secondary"], expand=True),
+            ], spacing=11, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+            for tecla, texto in self.ATAJOS
+        ]
+        modal = AppModal(
+            page=self.page,
+            title="Atajos del mostrador",
+            content=ft.Column(
+                filas + [
+                    ft.Container(height=4),
+                    ft.Text("Los atajos no disparan mientras hay una ventana abierta "
+                            "adelante — ahí Esc la cierra.",
+                            size=12, color=COLORS["text_muted"]),
+                ],
+                spacing=8, tight=True, scroll=ft.ScrollMode.AUTO,
+            ),
+            actions=[ModalAction(t("common.close"), on_click=lambda e: modal.close())],
+            width_pct=0.36,
+        )
+        self._track(modal)
+        modal.open()
+
     def _nuevo_atendimiento(self):
-        """Esc: larga o atendimento atual e volta o foco para a busca."""
+        """Larga o atendimento atual e volta o foco para a busca."""
         self._reset()
         self._focus(self.search_field)
 
@@ -936,11 +1070,23 @@ class CajaView(ft.Container):
                 ft.Column([
                     ft.Text("OTROS CARGOS", size=12, weight=ft.FontWeight.W_700,
                             color=COLORS["text_secondary"]),
-                    ft.Text("Cargos de tesorería (reconexión, materiales, cuota de "
-                            "conexión…). No es consumo de agua.",
+                    ft.Text("Reconexión, materiales, cuota de conexión… No es "
+                            "consumo de agua.",
                             size=11, color=COLORS["text_muted"]),
                 ], spacing=1, expand=True),
-            ]),
+                # O balcão também lança: a junta não tem setores, e quem cobra é
+                # quem tem de poder faturar o que ninguém lançou antes.
+                ft.TextButton(
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.ADD_CARD, size=15,
+                                color=COLORS["accent_secondary"]),
+                        ft.Text("Cargo nuevo (F12)", size=12,
+                                color=COLORS["accent_secondary"]),
+                    ], spacing=6, tight=True),
+                    tooltip="Facturar acá mismo un cargo con valor libre",
+                    on_click=lambda e: self._open_cargo(),
+                ),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=4),
             self.cargos_list,
         ]
 
@@ -954,11 +1100,24 @@ class CajaView(ft.Container):
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 ft.Divider(height=1, color=COLORS["border_subtle"]),
+                # Rótulo em cima, montante embaixo. Antes era tudo na mesma Row
+                # com `vertical_alignment=END`, e alinhar pelo rodapé da caixa de
+                # texto três tamanhos diferentes (11/26/13) deixava as linhas de
+                # base escalonadas — o "torto". Flet não expõe `text_baseline` na
+                # Row, então CrossAxisAlignment.BASELINE não é opção: quem
+                # resolve é o empilhamento.
                 ft.Row(
                     [
-                        ft.Text("SALDO PENDIENTE", size=11, weight=ft.FontWeight.W_700, color=COLORS["text_muted"]),
-                        self.saldo_big, self.saldo_cnt,
-                        ft.Container(expand=True),
+                        ft.Column(
+                            [
+                                ft.Text("SALDO PENDIENTE", size=11,
+                                        weight=ft.FontWeight.W_700,
+                                        color=COLORS["text_muted"]),
+                                self.saldo_big,
+                                self.saldo_cnt,
+                            ],
+                            spacing=1, expand=True,
+                        ),
                         ft.TextButton(
                             content=ft.Row([
                                 ft.Icon(ft.Icons.CALENDAR_MONTH, size=15,
@@ -970,7 +1129,7 @@ class CajaView(ft.Container):
                             on_click=lambda e: self._open_acuerdo(),
                         ),
                     ],
-                    vertical_alignment=ft.CrossAxisAlignment.END, spacing=13,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=13,
                 ),
                 self.acuerdo_box,
                 self.cargos_block,
@@ -1115,7 +1274,7 @@ class CajaView(ft.Container):
         self.vuelto_val = ft.Text("Gs. 0", size=30, weight=ft.FontWeight.W_800, color=COLORS["accent_success"])
         self.vuelto_box = ft.Container(
             content=ft.Row([self.vuelto_lbl, ft.Container(expand=True), self.vuelto_val],
-                           vertical_alignment=ft.CrossAxisAlignment.END),
+                           vertical_alignment=ft.CrossAxisAlignment.CENTER),
             padding=ft.Padding.symmetric(horizontal=17, vertical=13), border_radius=RADIUS["lg"],
             bgcolor=ft.Colors.with_opacity(0.12, COLORS["accent_success"]),
             border=ft.Border.all(1, ft.Colors.with_opacity(0.28, COLORS["accent_success"])),
@@ -1161,9 +1320,11 @@ class CajaView(ft.Container):
                     self.detail_list,
                     self.brk_box,
                     ft.Container(
+                        # CENTER, não END: 13 contra 30 alinhados pelo rodapé da
+                        # caixa de texto sai escalonado (mesma causa do saldo).
                         content=ft.Row([ft.Text("SELECCIONADO", size=13, weight=ft.FontWeight.W_700, color=COLORS["text_secondary"]),
                                         ft.Container(expand=True), self.total_text],
-                                       vertical_alignment=ft.CrossAxisAlignment.END),
+                                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
                         padding=ft.Padding.symmetric(horizontal=0, vertical=13),
                         border=ft.Border.only(top=ft.BorderSide(1, COLORS["border"]),
                                               bottom=ft.BorderSide(1, COLORS["border"])),
@@ -1392,7 +1553,8 @@ class CajaView(ft.Container):
             if cid:
                 self._bg(lambda: self._select_client(cid))
 
-        open_client_form(self.page, self.show_snackbar, prefill=prefill, on_saved=_after)
+        self._track(open_client_form(self.page, self.show_snackbar, prefill=prefill,
+                                     on_saved=_after))
 
     def _status_chip(self, status: str) -> ft.Container:
         colors = {"ATIVO": COLORS["status_active"], "CORTADO": COLORS["status_cut"],
@@ -1440,7 +1602,13 @@ class CajaView(ft.Container):
         self.client_chip.visible = True
 
         self.saldo_big.value = _money(ctx.get("saldo_pendiente", 0))
-        self.saldo_cnt.value = f"{ctx.get('facturas_pendientes', 0)} facturas"
+        n_pend = int(ctx.get("facturas_pendientes", 0) or 0)
+        self.saldo_cnt.value = (
+            "Sin deuda" if not n_pend
+            else "1 factura pendiente" if n_pend == 1
+            else f"{n_pend} facturas pendientes")
+        self.saldo_cnt.color = (COLORS["accent_success"] if not n_pend
+                                else COLORS["text_secondary"])
 
         self._render_acuerdo(ctx.get("acuerdo"))
 
@@ -1529,8 +1697,13 @@ class CajaView(ft.Container):
                     1, COLORS["accent_secondary"] if c["sel"] else COLORS["accent_warning"]),
                 ink=True, on_click=lambda e, idx=i: self._toggle_cargo(idx),
             ))
+        if not filas:
+            # O bloco não some mais quando não há cargo: é dele que sai o botão
+            # de lançar um, e um bloco invisível é um botão que não existe.
+            filas = [ft.Text("Sin cargos aparte del agua.", size=12,
+                             color=COLORS["text_muted"])]
         self.cargos_list.controls = filas
-        self.cargos_block.visible = bool(filas)
+        self.cargos_block.visible = bool(self._ctx)
         self._u(self.cargos_list)
         self._u(self.cargos_block)
 
@@ -1716,9 +1889,14 @@ class CajaView(ft.Container):
                     content=ft.Text(str(ano) if j == 0 else "", size=12,
                                     weight=ft.FontWeight.W_800, color=COLORS["text_muted"]),
                 )
+                # `wrap`: seis células de 112 + o rótulo do ano dão ~760 px. Numa
+                # janela estreita (a caja aberta pelo menu não é tela cheia) a
+                # linha estourava o painel e o Flet pintava a faixa de overflow
+                # em cima da grade. Com wrap ela dobra em vez de estourar.
                 rows.append(ft.Row(
                     [etiqueta] + [self._month_cell(i, c) for i, c in bloque],
-                    spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=8, run_spacing=8, wrap=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ))
 
         self.months_grid.controls = rows
@@ -1774,10 +1952,14 @@ class CajaView(ft.Container):
         Era texto morto: o cajero via a data e o valor e não podia fazer nada com
         aquilo. O caso mais comum do balcão é "perdí el recibo".
         """
+        fallo = False
         try:
             pays = payment_service.list_by_client(client_id, limit=3)
-        except Exception:
-            pays = []
+        except Exception as exc:  # noqa: BLE001
+            # "Sin pagos registrados" quando a chamada falhou é mentira no
+            # balcão — quem perdeu o recibo ouviria que nunca pagou.
+            print(f"[Caja] recent_payments_failed err={exc}")
+            pays, fallo = [], True
         rows = []
         for p in pays:
             nro = p.get("numero_recibo")
@@ -1800,7 +1982,11 @@ class CajaView(ft.Container):
                 if grupo else None,
             ))
         if not rows:
-            rows = [ft.Text("Sin pagos registrados.", size=12, color=COLORS["text_muted"])]
+            rows = [ft.Text(
+                "No se pudieron cargar los últimos pagos." if fallo
+                else "Sin pagos registrados.",
+                size=12,
+                color=COLORS["accent_warning"] if fallo else COLORS["text_muted"])]
         self.recent_pays.controls = rows
         self._u(self.recent_pays)
 
@@ -1837,7 +2023,8 @@ class CajaView(ft.Container):
     def _load_consumo(self, client_id: str):
         try:
             readings = client_service.get_readings(client_id, limit=6) or []
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Caja] readings_failed err={exc}")
             readings = []
         readings = sorted(
             readings, key=lambda r: (r.get("ano_referencia", 0), r.get("mes_referencia", 0)))[-6:]
@@ -1963,7 +2150,9 @@ class CajaView(ft.Container):
             else:
                 tag, tag_col = "deuda", COLORS["accent_warning"]
 
-            etiqueta = (self._cargo_label(a["factura"])[:18] if a["kind"] == "cargo"
+            # Sem corte na mão: o `width` + ELLIPSIS do Text já resolve, e cortar
+            # antes deixava o texto truncado sem as reticências.
+            etiqueta = (self._cargo_label(a["factura"]) if a["kind"] == "cargo"
                         else f"{_MES[a['mes'] - 1]} {a['ano']}")
             valor = a["aplicado"] if cobrar > 0 else a["saldo"]
             rows.append(ft.Row([
@@ -2169,7 +2358,9 @@ class CajaView(ft.Container):
                             color=COLORS["accent_warning"]),
                     ft.Text(item["nombre"][:22], size=12, weight=ft.FontWeight.W_600,
                             color=COLORS["text_primary"]),
-                    ft.Icon(ft.Icons.CLOSE, size=13, color=COLORS["text_muted"]),
+                    # Era um X, e um X promete descartar — o chip retoma.
+                    ft.Icon(ft.Icons.PLAY_ARROW, size=13,
+                            color=COLORS["accent_secondary"]),
                 ], spacing=6, tight=True),
                 padding=ft.Padding.symmetric(horizontal=10, vertical=6),
                 bgcolor=COLORS["bg_input"], border_radius=RADIUS["pill"],
@@ -2225,12 +2416,44 @@ class CajaView(ft.Container):
             self.page, self.show_snackbar, self._ctx, self._get_company,
             metodo=self.metodo, on_done=_after))
 
+    # ------------------------------------------------- cargo de valor livre
+    def _open_cargo(self):
+        """
+        Fatura um cargo na hora, com valor livre, e cobra no mesmo atendimento.
+
+        Vira uma fatura `AVULSA` de verdade — numerada, auditável, e cobrada
+        pelo mesmo caminho dos cargos da tesouraria. Não existe cobro fora de
+        fatura no balcão: o dinheiro sempre cai em cima de um documento.
+        """
+        if not self._ctx:
+            self.show_snackbar("Elegí un cliente para lanzar el cargo.", error=True)
+            return
+        if not self._sesion:
+            self.show_snackbar("Abrí la caja antes de lanzar un cargo.", error=True)
+            return
+        client = self._ctx.get("client") or {}
+
+        def _after(invoice_id: str | None):
+            # Recarrega o contexto preservando o que já estava marcado e deixa o
+            # cargo novo marcado também — foi lançado para ser cobrado agora.
+            meses = {(c["ano"], c["mes"]) for c in self._cells if c["sel"]}
+            cargos = {c["f"]["id"] for c in self._cargos if c["sel"]}
+            if invoice_id:
+                cargos.add(invoice_id)
+            self._bg(lambda: self._select_client(
+                client.get("id"), self._meses_futuro,
+                preservar={"meses": meses, "cargos": cargos}))
+
+        self._track(open_cargo_dialog(self.page, self.show_snackbar, client,
+                                      on_done=_after))
+
     # ------------------------------------------------------- turno / gaveta
     def _open_atenciones(self):
-        if not self.page:
+        page = self._pagina()
+        if page is None:
             return
         self._track(open_atenciones_dialog(
-            self.page, self.show_snackbar, self._get_company,
+            page, self.show_snackbar, self._get_company,
             on_changed=self._refrescar_cliente))
 
     def _refrescar_cliente(self):
@@ -2622,9 +2845,12 @@ class CajaView(ft.Container):
         emission_id = job.get("id")
         self._reset()
         if emission_id:
+            # Sem Esc: a emissão tem os próprios botões («Cancelar emisión» antes
+            # da firma, «Cerrar» no fim). Fechar às cegas deixaria o cajero sem
+            # saber se o KuDE saiu.
             self._track(open_sifen_progress(
                 self.page, self.show_snackbar, emission_id=emission_id,
-                receptor=f"{nombre or '-'} · {doc}"))
+                receptor=f"{nombre or '-'} · {doc}"), esc_cierra=False)
         else:
             self.show_snackbar("✓ Cobro registrado · factura en cola")
 

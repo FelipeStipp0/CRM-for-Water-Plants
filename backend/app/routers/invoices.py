@@ -53,6 +53,8 @@ def invoice_to_response(invoice: Invoice, client_nombre: Optional[str] = None) -
             cantidad=item.cantidad,
             precio_unitario=item.precio_unitario,
             subtotal=item.subtotal,
+            iva_afectacion=item.iva_afectacion,
+            iva_tasa=item.iva_tasa,
         )
         for item in invoice.items
     ]
@@ -117,6 +119,8 @@ async def create_invoice(
             descripcion=item.descripcion,
             cantidad=item.cantidad,
             precio_unitario=item.precio_unitario,
+            iva_afectacion=item.iva_afectacion,
+            iva_tasa=item.iva_tasa,
         )
         for item in invoice_data.items
     ]

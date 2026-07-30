@@ -892,6 +892,10 @@ class InvoicesView(ft.Container):
                             "descripcion": v["descripcion"],
                             "cantidad": v["cantidad"],
                             "precio_unitario": float(v["precio"]),
+                            # IVA do produto do catálogo: é o que a factura legal
+                            # usa quando a caja cobra este cargo.
+                            "iva_tasa": v["iva_tasa"],
+                            "iva_afectacion": v["iva_afectacion"],
                         }
                     )
 

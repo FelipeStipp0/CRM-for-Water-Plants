@@ -160,7 +160,8 @@ backend/app/
 - **[AI_CONTEXT.md](docs/AI_CONTEXT.md)** — guia de navegação p/ IA (onde mexer, mapa de referência do Flet).
 - **[architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md)** — arquitetura de ponta a ponta.
 - **[CHANGES_2026-07.md](docs/CHANGES_2026-07.md)** — Modo Caja completo (busca, cadastro no balcão,
-  otros cargos, cobro parcial, acuerdo de pago, anular/reimprimir, sangría/cierre às cegas, teclado).
+  otros cargos + **cargo de valor livre faturado no balcão**, cobro parcial, acuerdo de pago,
+  anular/reimprimir, sangría/cierre às cegas, teclado com `Esc` = voltar).
   Plano de origem: [PLANO_CAJA.md](docs/PLANO_CAJA.md).
 - **[CHANGES_2026-06.md](docs/CHANGES_2026-06.md)** — mudanças anteriores (Flet, recibo, reativação auto, i18n, mapa).
 - **Flet: doc oficial** em `flet/website/docs/` (fonte de verdade da API). [FLET_API_GOTCHAS.md](docs/FLET_API_GOTCHAS.md) — só o específico deste app (exe branded, `AppModal`).

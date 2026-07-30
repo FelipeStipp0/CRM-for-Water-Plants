@@ -230,3 +230,66 @@ async def test_atenciones_muestra_el_cobro_anulado(
     assert fila["anulada"] is True
     assert fila["motivo_anulacion"] == "Cobré al cliente equivocado"
     assert fila["anulada_por"]
+
+
+# ------------------------------- cargo de valor livre lançado no balcão
+@pytest.mark.asyncio
+async def test_cargo_libre_del_mostrador_nace_cobrable_con_su_iva(
+        test_client: AsyncClient, auth_headers, test_settings, sample_client):
+    """
+    O balcão fatura na hora: `POST /invoices/` com valor e IVA livres.
+
+    O plano original dizia que todo cargo nasce na tesouraria e o balcão só
+    cobra — mas a junta não tem setores, e quem cobra tem de poder faturar o
+    que ninguém lançou. O cargo tem de sair do endpoint já pronto para ser
+    cobrado no mesmo atendimento: numerado, pendente e **com o IVA escolhido**,
+    que é o que vai para a factura legal.
+    """
+    hoy = date.today()
+    r = await test_client.post("/invoices/", headers=auth_headers, json={
+        "client_id": str(sample_client.id),
+        "tipo": "AVULSA",
+        "mes_referencia": hoy.month,
+        "ano_referencia": hoy.year,
+        "items": [{
+            "descripcion": "Multa por conexión clandestina",
+            "cantidad": 2,
+            "precio_unitario": 75000,
+            "iva_tasa": 5,
+            "iva_afectacion": 3,
+        }],
+    })
+    assert r.status_code == 201, r.text
+    creada = r.json()
+    assert creada["numero_factura"]
+    assert float(creada["valor_total"]) == 150000.0
+
+    # Sem o IVA por item, a AVULSA nascia sempre 10% gravado e a factura legal
+    # saía com o IVA errado — o cargo de valor livre não teria como ser exento.
+    assert creada["items"][0]["iva_tasa"] == 5
+    assert creada["items"][0]["iva_afectacion"] == 3
+
+    # E já aparece no balcão, em «otros cargos», pronto para entrar no cobro.
+    r = await test_client.get(f"/clients/{sample_client.id}/payment-context",
+                              headers=auth_headers)
+    cargos = r.json()["otros_cargos"]
+    assert len(cargos) == 1
+    assert cargos[0]["id"] == creada["id"]
+    assert float(cargos[0]["saldo_devedor"]) == 150000.0
+    assert cargos[0]["items"][0]["iva_tasa"] == 5
+
+
+@pytest.mark.asyncio
+async def test_cargo_libre_rechaza_iva_invalido(
+        test_client: AsyncClient, auth_headers, test_settings, sample_client):
+    """IVA fora de 0/5/10 não existe no SIFEN — trava no schema, não no KuDE."""
+    hoy = date.today()
+    r = await test_client.post("/invoices/", headers=auth_headers, json={
+        "client_id": str(sample_client.id),
+        "tipo": "AVULSA",
+        "mes_referencia": hoy.month,
+        "ano_referencia": hoy.year,
+        "items": [{"descripcion": "Cargo raro", "cantidad": 1,
+                   "precio_unitario": 1000, "iva_tasa": 7}],
+    })
+    assert r.status_code == 422
