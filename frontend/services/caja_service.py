@@ -41,6 +41,21 @@ class CajaService:
             "observaciones": observaciones,
         })
 
+    def movimiento(self, categoria: str, valor: float, descripcion: str) -> dict:
+        """
+        Sangría (dinheiro sai da gaveta) ou reposición (volta a entrar).
+
+        Devolve {"movimiento_id", "resumen"} — o resumo já vem recalculado, então
+        o efectivo esperado na tela muda na hora, sem segundo round-trip.
+        """
+        return api.post("/caja/movimiento", data={
+            "categoria": categoria, "valor": valor, "descripcion": descripcion,
+        })
+
+    def movimientos(self) -> list[dict]:
+        """Sangrías e reposiciones do turno aberto."""
+        return api.get("/caja/movimientos")
+
     def sesiones(
         self, limit: int = 50, operador: Optional[str] = None,
         estado: Optional[str] = None,

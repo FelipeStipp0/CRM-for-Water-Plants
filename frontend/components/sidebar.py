@@ -32,6 +32,7 @@ class Sidebar(ft.Container):
             {"icon": ft.Icons.WATER_DROP_OUTLINED, "label_key": "nav.readings", "route": "/readings", "scope": "readings"},
             {"icon": ft.Icons.RECEIPT_LONG_OUTLINED, "label_key": "nav.invoices", "route": "/invoices", "scope": "invoices"},
             {"icon": ft.Icons.INVENTORY_2_OUTLINED, "label_key": "nav.products", "route": "/products", "scope": "invoices"},
+            {"icon": ft.Icons.STOREFRONT_OUTLINED, "label_key": "nav.caja", "route": "/caja", "scope": ("caja", "payments")},
             {"icon": ft.Icons.POINT_OF_SALE_OUTLINED, "label_key": "nav.payments", "route": "/payments", "scope": "payments"},
             {"icon": ft.Icons.CONTENT_CUT, "label_key": "nav.cutoff", "route": "/cutoff", "scope": "cutoff"},
             {"icon": ft.Icons.ACCOUNT_BALANCE_OUTLINED, "label_key": "nav.finance", "route": "/finance", "scope": "finance"},

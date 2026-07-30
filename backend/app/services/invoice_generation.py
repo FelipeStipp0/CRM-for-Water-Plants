@@ -54,9 +54,40 @@ class InvoiceGenerationService:
     1. Calcular valor baseado em leitura e TARIFA UNICA GLOBAL
     2. Aplicar excedente quando consumo > limite base
     3. Gerar faturas independentes (apenas valor do mes)
+    4. Somar a cuota do acordo de pagamento do mes, quando o cliente tem um
 
     NOTA: O sistema usa tarifa unica. Subsidios sao aplicados no PAGAMENTO.
     """
+
+    @staticmethod
+    def _campos_cuota(cuota_par) -> dict:
+        """
+        Campos de cuota para o construtor da Invoice.
+
+        A parcela do acordo entra na fatura do mes: `valor_total`/`saldo_devedor`
+        somam a cuota, e os campos `cuota_*` guardam o recorte com IVA e afetacao
+        proprios (a cuota nao e consumo de agua, e nao usa o IVA das configuracoes).
+        """
+        if not cuota_par:
+            return {}
+        acuerdo, cuota = cuota_par
+        return {
+            "cuota_valor": cuota.valor,
+            "cuota_iva_tasa": acuerdo.cuota_iva_tasa,
+            "cuota_iva_afectacion": acuerdo.cuota_iva_afectacion,
+            "cuota_numero": cuota.numero,
+            "agreement_id": acuerdo.id,
+        }
+
+    @staticmethod
+    async def _confirmar_cuota(cuota_par, invoice: Invoice) -> None:
+        """Marca a parcela como FACTURADA depois que a fatura do mes existe."""
+        if not cuota_par:
+            return
+        from app.services.agreement_service import marcar_cuota_facturada
+
+        acuerdo, cuota = cuota_par
+        await marcar_cuota_facturada(acuerdo, cuota, invoice.id)
 
     @staticmethod
     def calculate_excess(
@@ -181,6 +212,12 @@ class InvoiceGenerationService:
         # Gera numero sequencial
         numero_factura = await Counter.get_next("invoice_number")
 
+        # Cuota do acordo de pagamento agendada para este mes (se houver)
+        from app.services.agreement_service import cuota_para_periodo
+        cuota_par = await cuota_para_periodo(
+            client.id, reading.mes_referencia, reading.ano_referencia)
+        cuota_extra = cuota_par[1].valor if cuota_par else Decimal("0")
+
         # Cria fatura
         invoice = Invoice(
             client=client,
@@ -194,12 +231,14 @@ class InvoiceGenerationService:
             consumo=consumo,
             tarifa_base=tarifa_base,
             excedente=excedente,
-            valor_total=valor_total,
-            saldo_devedor=valor_total,
+            valor_total=valor_total + cuota_extra,
+            saldo_devedor=valor_total + cuota_extra,
             reading_id=reading.id,
             numero_factura=numero_factura,
+            **cls._campos_cuota(cuota_par),
         )
         await invoice.insert()
+        await cls._confirmar_cuota(cuota_par, invoice)
 
         return InvoiceGenerationResult(
             success=True,
@@ -240,6 +279,12 @@ class InvoiceGenerationService:
             dias_vencimiento=settings.dias_vencimiento,
             dia_geracao_faturas=settings.dia_geracao_faturas,
         )
+        # Adiantar um mes que tem parcela agendada cobra a parcela junto: e a
+        # fatura daquele mes, e a parcela e parte dela.
+        from app.services.agreement_service import cuota_para_periodo
+        cuota_par = await cuota_para_periodo(client.id, mes, ano)
+        cuota_extra = cuota_par[1].valor if cuota_par else Decimal("0")
+
         numero_factura = await Counter.get_next("invoice_number")
         invoice = Invoice(
             client=client,
@@ -253,12 +298,14 @@ class InvoiceGenerationService:
             consumo=0,
             tarifa_base=settings.tarifa_base,
             excedente=Decimal("0"),
-            valor_total=settings.tarifa_base,
-            saldo_devedor=settings.tarifa_base,
+            valor_total=settings.tarifa_base + cuota_extra,
+            saldo_devedor=settings.tarifa_base + cuota_extra,
             reading_id=None,
             numero_factura=numero_factura,
+            **cls._campos_cuota(cuota_par),
         )
         await invoice.insert()
+        await cls._confirmar_cuota(cuota_par, invoice)
         return invoice
 
     @classmethod
@@ -313,6 +360,11 @@ class InvoiceGenerationService:
         if valor_total < settings.valor_minimo_emissao:
             return results
 
+        # Parcelas agendadas para o periodo, numa consulta so (a maioria dos
+        # clientes nao tem acordo).
+        from app.services.agreement_service import cuotas_del_periodo
+        cuotas = await cuotas_del_periodo(mes, ano)
+
         for client in all_clients:
             if client.id in clients_with_reading:
                 continue
@@ -330,6 +382,8 @@ class InvoiceGenerationService:
 
             try:
                 numero_factura = await Counter.get_next("invoice_number")
+                cuota_par = cuotas.get(client.id)
+                cuota_extra = cuota_par[1].valor if cuota_par else Decimal("0")
 
                 invoice = Invoice(
                     client=client,
@@ -343,12 +397,14 @@ class InvoiceGenerationService:
                     consumo=0,
                     tarifa_base=settings.tarifa_base,
                     excedente=Decimal("0"),
-                    valor_total=valor_total,
-                    saldo_devedor=valor_total,
+                    valor_total=valor_total + cuota_extra,
+                    saldo_devedor=valor_total + cuota_extra,
                     reading_id=None,
                     numero_factura=numero_factura,
+                    **cls._campos_cuota(cuota_par),
                 )
                 await invoice.insert()
+                await cls._confirmar_cuota(cuota_par, invoice)
                 results.total_generated += 1
             except Exception as e:
                 results.errors.append(

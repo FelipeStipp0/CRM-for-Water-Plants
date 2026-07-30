@@ -140,6 +140,16 @@ class AppModal:
             on_dismiss=self._on_dismiss,
         )
 
+    @property
+    def is_open(self) -> bool:
+        """
+        O dialog está na tela?
+
+        Quem tem atalhos de teclado globais precisa saber disto: uma tecla de
+        função que dispara com um dialog aberto empilha telas em cima de telas.
+        """
+        return self._dialog is not None and bool(self._dialog.open)
+
     def open(self) -> None:
         if self._dialog is not None and self._dialog.open:
             return

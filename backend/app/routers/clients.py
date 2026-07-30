@@ -10,7 +10,7 @@ from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.models.client import Client, ClientStatus
-from app.models.invoice import Invoice, InvoiceStatus
+from app.models.invoice import Invoice, InvoiceStatus, InvoiceType
 from app.models.settings import SystemSettings
 from app.models.user import User
 from app.routers.auth import get_current_active_user, require_scopes
@@ -128,6 +128,7 @@ async def list_clients(
 
 @router.get("/search", response_model=List[ClientResponse])
 async def search_clients(
+    response: Response,
     current_user: Annotated[User, Depends(get_current_active_user)],
     q: Optional[str] = Query(None, min_length=2),
     manzana: Optional[str] = None,
@@ -139,6 +140,10 @@ async def search_clients(
     """
     Busca clientes por nome, CI/RUC, medidor ou localizacao.
     Filtros opcionais: is_sponsor, is_aluguel.
+
+    `X-Total-Count` traz o total que casa com a busca, nao so os devolvidos: quem
+    chama com `limit` baixo (o Modo Caja usa 20) precisa poder dizer "20 de 137"
+    em vez de esconder o resto sem avisar.
     """
     filters = []
 
@@ -169,8 +174,10 @@ async def search_clients(
     else:
         query = Client.find()
 
+    total = await query.count()
     clients = await query.limit(limit).to_list()
 
+    response.headers["X-Total-Count"] = str(total)
     return [client_to_response(c) for c in clients]
 
 
@@ -282,26 +289,23 @@ async def get_payment_context(
         Invoice.saldo_devedor > 0,
         Invoice.status != InvoiceStatus.ANULADA,
     ).to_list()
-    pendientes.sort(key=lambda inv: (inv.ano_referencia, inv.mes_referencia))
+    pendientes.sort(key=lambda inv: (inv.ano_referencia, inv.mes_referencia, inv.fecha_emision))
 
-    facturas = [
-        {
-            "numero_factura": inv.numero_factura,
-            "mes_referencia": inv.mes_referencia,
-            "ano_referencia": inv.ano_referencia,
-            "saldo_devedor": inv.saldo_devedor,
-            "valor_total": inv.valor_total,
-            "status": inv.status,
-        }
-        for inv in pendientes
-    ]
+    facturas = [_factura_dict(inv) for inv in pendientes]
+
+    # "Otros cargos": o que a tesouraria lançou como AVULSA (reconexión, material,
+    # cuota de conexión, contribución extraordinaria). Sai da grade de meses e vira
+    # lista própria — somar isso no mês faria o balcão ler consumo de água onde não é.
+    otros_cargos = [f for f in facturas if f["tipo"] != InvoiceType.CONSUMO.value]
 
     settings = await SystemSettings.get_instance()
 
     # Grade de meses (para o Modo Caja): de -3 a +`meses_futuro` do atual, mais
     # qualquer pendente mais antiga. Cada célula: pago / pendente / sem factura.
+    # SÓ faturas de CONSUMO — cada célula é o mês de água daquele período.
     todas = await Invoice.find(
         {"client.$id": cid},
+        Invoice.tipo == InvoiceType.CONSUMO,
         Invoice.status != InvoiceStatus.ANULADA,
     ).to_list()
 
@@ -312,11 +316,17 @@ async def get_payment_context(
     por_mes: dict = {}
     for inv in todas:
         k = (inv.ano_referencia, inv.mes_referencia)
-        cell = por_mes.setdefault(k, {"saldo": Decimal("0"), "invoice_ids": [], "pendente": False})
+        cell = por_mes.setdefault(
+            k, {"saldo": Decimal("0"), "invoice_ids": [], "pendente": False,
+                "cuota": Decimal("0")})
         if inv.saldo_devedor and inv.saldo_devedor > 0:
             cell["saldo"] += inv.saldo_devedor
             cell["invoice_ids"].append(str(inv.id))
             cell["pendente"] = True
+            # Parte do mês que é cuota de um acordo, não consumo: o cajero precisa
+            # saber que está cobrando parcela quando lê o valor em voz alta.
+            if inv.cuota_valor:
+                cell["cuota"] += inv.cuota_valor
 
     hoy = date.today()
     atual = (hoy.year, hoy.month)
@@ -331,21 +341,63 @@ async def get_payment_context(
         if v is None:
             estado = "sem_factura"
             grade.append({"ano": k[0], "mes": k[1], "estado": estado,
-                          "saldo": Decimal("0"), "invoice_ids": []})
+                          "saldo": Decimal("0"), "invoice_ids": [],
+                          "cuota": Decimal("0")})
         else:
             estado = "pendente" if v["pendente"] else "pagada"
             grade.append({"ano": k[0], "mes": k[1], "estado": estado,
-                          "saldo": v["saldo"], "invoice_ids": v["invoice_ids"]})
+                          "saldo": v["saldo"], "invoice_ids": v["invoice_ids"],
+                          "cuota": v["cuota"]})
         k = _add(k, 1)
+
+    # Acordo ativo: a caja mostra o andamento e impede abrir um segundo.
+    from app.services.agreement_service import acuerdo_activo_dict
 
     return {
         "client": client_to_response(client),
         "saldo_pendiente": sum(inv.saldo_devedor for inv in pendientes),
         "facturas_pendientes": len(pendientes),
         "facturas": facturas,
+        "otros_cargos": otros_cargos,
         "taxa_reativacao": settings.taxa_reativacao,
         "tarifa_base": settings.tarifa_base,
+        "iva_tasa_agua": settings.iva_tasa_agua,
+        "iva_afectacion_agua": settings.iva_afectacion_agua,
         "grade_meses": grade,
+        "acuerdo": await acuerdo_activo_dict(cid),
+    }
+
+
+def _factura_dict(inv: Invoice) -> dict:
+    """Fatura como o balcão precisa dela: id (para cobrar direcionado) e itens."""
+    return {
+        "id": str(inv.id),
+        "tipo": inv.tipo.value if hasattr(inv.tipo, "value") else str(inv.tipo),
+        "numero_factura": inv.numero_factura,
+        "mes_referencia": inv.mes_referencia,
+        "ano_referencia": inv.ano_referencia,
+        "fecha_emision": inv.fecha_emision,
+        "fecha_vencimiento": inv.fecha_vencimiento,
+        "saldo_devedor": inv.saldo_devedor,
+        "valor_total": inv.valor_total,
+        "status": inv.status,
+        # Recorte da cuota do acordo dentro do mês, com o IVA dela: a factura
+        # legal precisa separar "cuota" de "agua", e a cuota não usa o IVA das
+        # configurações — usa o que foi escolhido ao fechar o acordo.
+        "cuota_valor": inv.cuota_valor,
+        "cuota_iva_tasa": inv.cuota_iva_tasa,
+        "cuota_iva_afectacion": inv.cuota_iva_afectacion,
+        "cuota_numero": inv.cuota_numero,
+        "items": [
+            {
+                "descripcion": it.descripcion,
+                "cantidad": it.cantidad,
+                "precio_unitario": it.precio_unitario,
+                "iva_tasa": it.iva_tasa,
+                "iva_afectacion": it.iva_afectacion,
+            }
+            for it in (inv.items or [])
+        ],
     }
 
 

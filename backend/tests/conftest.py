@@ -22,6 +22,7 @@ from app.models.finance import CashTransaction, Expense, Employee, Payroll, Cash
 from app.models.sponsor import SponsorDebt, SponsorInvoice
 from app.models.cutoff import CutoffNotice
 from app.models.audit import AuditLog
+from app.models.agreement import PaymentAgreement
 from app.models.sifen import SifenEmission, SifenSessionLock, SifenCredential, SifenCoordinator
 from app.utils.security import get_password_hash, create_access_token
 
@@ -58,6 +59,7 @@ async def test_db():
             SifenSessionLock,
             SifenCredential,
             SifenCoordinator,
+            PaymentAgreement,
         ]
     )
 
@@ -89,7 +91,7 @@ async def test_client(test_db) -> AsyncGenerator[AsyncClient, None]:
         allow_headers=["*"],
     )
 
-    from app.routers import auth, clients, readings, invoices, payments, settings as settings_router, finance, cutoff as cutoff_router
+    from app.routers import auth, clients, readings, invoices, payments, settings as settings_router, finance, cutoff as cutoff_router, caja, agreements
     test_app.include_router(auth.router, prefix="/auth", tags=["Autenticacao"])
     test_app.include_router(clients.router, prefix="/clients", tags=["Clientes"])
     test_app.include_router(readings.router, prefix="/readings", tags=["Leituras"])
@@ -99,6 +101,8 @@ async def test_client(test_db) -> AsyncGenerator[AsyncClient, None]:
     test_app.include_router(finance.router, prefix="/finance", tags=["Financeiro"])
     test_app.include_router(cutoff_router.router, prefix="/cutoff", tags=["Corte"])
     test_app.include_router(cutoff_router.qr_router, prefix="/cutoff", tags=["Corte QR"])
+    test_app.include_router(caja.router, prefix="/caja", tags=["Caja"])
+    test_app.include_router(agreements.router, prefix="/agreements", tags=["Acuerdos"])
 
     transport = ASGITransport(app=test_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -122,9 +126,31 @@ async def test_user(test_db) -> User:
 
 
 @pytest_asyncio.fixture
-async def auth_headers(test_user: User) -> dict:
-    """Headers de autenticacao para testes."""
-    token = create_access_token(data={"sub": test_user.username})
+async def auth_headers(test_user: User, monkeypatch) -> dict:
+    """
+    Headers de autenticacao para testes.
+
+    O token de producao carrega `sub` + `org` (o slug da junta), e cada request
+    reativa o banco daquela org antes de buscar o usuario. Aqui o banco de teste
+    ja esta inicializado pela fixture `test_db`, entao a ativacao vira no-op: sem
+    isto todo teste de endpoint tomava 401 por falta do `org` no token e por
+    `ensure_org_db` nao achar a org em `wmapp_admin`.
+
+    O caminho de autenticacao em si continua real — token invalido segue dando
+    401, porque quem recusa e o decode, nao esta fixture.
+    """
+    from app.middleware.org_context import set_org_slug
+
+    async def _activate_org_db_test(slug: str):
+        set_org_slug(slug)
+        return None
+
+    monkeypatch.setattr(
+        "app.middleware.org_context.activate_org_db", _activate_org_db_test)
+
+    token = create_access_token(data={
+        "sub": test_user.username, "org": "test", "role": test_user.role,
+    })
     return {"Authorization": f"Bearer {token}"}
 
 

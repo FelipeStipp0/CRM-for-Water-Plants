@@ -60,6 +60,10 @@ def _sesion_to_dict(s: CashSession) -> dict:
         "estornos_total": s.estornos_total,
         "estornos_efectivo": s.estornos_efectivo,
         "estornos_efectivo_previos": s.estornos_efectivo_previos,
+        "sangrias_cantidad": s.sangrias_cantidad,
+        "sangrias_total": s.sangrias_total,
+        "reposiciones_cantidad": s.reposiciones_cantidad,
+        "reposiciones_total": s.reposiciones_total,
         "efectivo_esperado": s.efectivo_esperado,
         "efectivo_fisico": s.efectivo_fisico,
         "diferencia": s.diferencia,
@@ -119,6 +123,56 @@ async def caja_cerrar(
     except CajaError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     return _sesion_to_dict(sesion)
+
+
+class MovimientoRequest(BaseModel):
+    """Sangría (sale plata de la gaveta) o reposición (entra plata de vuelta)."""
+    categoria: str = Field(description="SANGRIA_CAJA o REPOSICION_CAJA")
+    valor: Decimal = Field(gt=0)
+    descripcion: str = Field(min_length=3, description="A dónde fue / de dónde vino")
+
+
+@router.post("/movimiento", status_code=status.HTTP_201_CREATED)
+async def caja_movimiento(
+    body: MovimientoRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    session_id: Optional[str] = None,
+):
+    """
+    Lança sangría/reposición no turno aberto e devolve o resumo já recalculado.
+
+    Devolver o resumo no mesmo round-trip é de propósito: o efectivo esperado
+    muda na hora, e o cajero precisa ver o novo número sem pedir de novo.
+    """
+    from app.models.finance import TransactionCategory
+    from app.services.caja_service import registrar_movimiento
+
+    try:
+        categoria = TransactionCategory(body.categoria)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Categoría de movimiento inválida")
+
+    sesion = await _resolver_sesion(current_user, session_id)
+    try:
+        mov = await registrar_movimiento(
+            sesion, categoria, body.valor, body.descripcion, current_user.username)
+    except CajaError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    resumen = await computar_sesion(sesion)
+    return {"movimiento_id": str(mov.id), "resumen": resumen}
+
+
+@router.get("/movimientos")
+async def caja_movimientos(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    session_id: Optional[str] = None,
+):
+    """Sangrías e reposiciones do turno."""
+    from app.services.caja_service import listar_movimientos
+
+    sesion = await _resolver_sesion(current_user, session_id)
+    return await listar_movimientos(sesion)
 
 
 @router.get("/sesiones")

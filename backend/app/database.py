@@ -40,6 +40,7 @@ def _get_org_document_models() -> list:
     from app.models.sponsor import SponsorDebt, SponsorInvoice
     from app.models.cutoff import CutoffNotice
     from app.models.audit import AuditLog
+    from app.models.agreement import PaymentAgreement
     from app.models.sifen import (
         SifenEmission, SifenSessionLock, SifenCredential, SifenCoordinator,
     )
@@ -47,6 +48,7 @@ def _get_org_document_models() -> list:
         User, Client, Titular, Reading, Invoice, Counter, Product, Payment,
         SystemSettings, CashTransaction, Expense, Employee,
         Payroll, CashSession, SponsorDebt, SponsorInvoice, CutoffNotice, AuditLog,
+        PaymentAgreement,
         SifenEmission, SifenSessionLock, SifenCredential, SifenCoordinator,
     ]
 

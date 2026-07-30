@@ -12,6 +12,7 @@ from typing import Annotated, Callable
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pydantic import BaseModel
 
 from app.config import get_settings
 from app.models.user import User
@@ -535,6 +536,31 @@ async def delete_user(
                             detail="Es el último master: la organización quedaría sin administrador.")
 
     await user.delete()
+
+
+class PasswordCheck(BaseModel):
+    """Confirmação de identidade sem emitir token novo."""
+    password: str
+
+
+@router.post("/verify-password")
+async def verify_own_password(
+    body: PasswordCheck,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+):
+    """
+    Confirma a senha do próprio usuário autenticado.
+
+    Usado pela pausa do Modo Caja: o cajero sai do balcão com o turno aberto e a
+    tela trancada, e quem destranca tem de ser ele — a gaveta continua no nome
+    dele até o cierre. Não emite token nem muda nada; só responde sim ou não.
+
+    Senha errada devolve **200 com `ok: false`**, não 401: o cliente trata 401
+    como sessão expirada e derrubaria o login inteiro — errar a senha na tela de
+    pausa não pode fechar o turno de quem só digitou torto.
+    """
+    ok = verify_password(body.password, current_user.hashed_password)
+    return {"ok": bool(ok), "username": current_user.username}
 
 
 @router.post("/change-password")

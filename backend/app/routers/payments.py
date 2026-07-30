@@ -2,6 +2,7 @@
 Endpoints de pagamentos.
 """
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, List, Optional
 
@@ -14,6 +15,7 @@ from app.models.payment import Payment
 from app.models.user import User
 from app.routers.auth import get_current_active_user, require_scopes
 from app.schemas.payment import (
+    AtencionRow,
     PaymentCreate,
     PaymentResponse,
     PaymentResult,
@@ -169,6 +171,7 @@ async def create_payment(
         reactivation_notice_id=str(result.reactivation_notice_id) if result.reactivation_notice_id else None,
         reactivation_qr_token=result.reactivation_qr_token,
         reactivation_comprobante=result.reactivation_comprobante,
+        acuerdo_quitado=result.acuerdo_quitado,
     )
 
 
@@ -195,6 +198,112 @@ async def anular_payment_endpoint(
         raise HTTPException(status_code=404, detail=str(exc))
     except PaymentReversalError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/atenciones", response_model=List[AtencionRow])
+async def listar_atenciones(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    q: Optional[str] = Query(None, description="Nº de recibo, nombre o CI/RUC del cliente"),
+    desde: Optional[datetime] = Query(None, description="Inicio del rango (UTC)"),
+    hasta: Optional[datetime] = Query(None, description="Fin del rango (UTC)"),
+    solo_mi_caja: bool = Query(False, description="Solo cobros del turno abierto ahora"),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """
+    Atendimentos anteriores para o balcão: reimprimir, anular e conferir o turno.
+
+    Sem filtro nenhum devolve os últimos cobros — que é o que o cajero quer em 90%
+    dos casos ("aquele recibo que acabei de imprimir"). `desde`/`hasta` vêm em UTC
+    porque quem sabe o fuso do balcão é o cliente do app, não o servidor.
+    """
+    filters: List[dict] = []
+
+    if desde or hasta:
+        rango: dict = {}
+        if desde:
+            rango["$gte"] = desde
+        if hasta:
+            rango["$lte"] = hasta
+        filters.append({"fecha_pago": rango})
+
+    if q and q.strip():
+        termo = q.strip()
+        alternativas: List[dict] = []
+        if termo.isdigit():
+            alternativas.append({"numero_recibo": int(termo)})
+        clientes = await Client.find({
+            "$or": [
+                {"nombre_completo": {"$regex": termo, "$options": "i"}},
+                {"ci_ruc": {"$regex": termo, "$options": "i"}},
+            ]
+        }).limit(200).to_list()
+        if clientes:
+            alternativas.append({"client.$id": {"$in": [c.id for c in clientes]}})
+        if not alternativas:
+            return []
+        filters.append({"$or": alternativas})
+
+    from app.services.caja_service import sesion_activa_id
+    sesion_id = await sesion_activa_id(current_user.username)
+    if solo_mi_caja:
+        if not sesion_id:
+            return []
+        filters.append({"cash_session_id": sesion_id})
+
+    query = Payment.find({"$and": filters}) if filters else Payment.find()
+    payments = await query.sort("-fecha_pago").limit(limit).to_list()
+    if not payments:
+        return []
+
+    client_ids = list({
+        p.client.ref.id if hasattr(p.client, "ref") else p.client.id for p in payments
+    })
+    clients_map = {c.id: c for c in await Client.find({"_id": {"$in": client_ids}}).to_list()}
+
+    # Factura electrónica de cada cobro (quando houve): a última emissão do
+    # pagamento — reemitir/cancelar sempre olha a mais recente.
+    from app.models.sifen import SifenEmission
+    emissions = await SifenEmission.find(
+        {"payment_id": {"$in": [p.id for p in payments]}}
+    ).sort("-created_at").to_list()
+    emission_map: dict = {}
+    for em in emissions:
+        emission_map.setdefault(em.payment_id, em)
+
+    rows: List[AtencionRow] = []
+    for p in payments:
+        cid = p.client.ref.id if hasattr(p.client, "ref") else p.client.id
+        client = clients_map.get(cid)
+        em = emission_map.get(p.id)
+        rows.append(AtencionRow(
+            id=str(p.id),
+            numero_recibo=p.numero_recibo,
+            numero_recibo_fmt=p.numero_recibo_fmt,
+            client_id=str(cid),
+            client_name=client.nombre_completo if client else "Desconocido",
+            client_ci_ruc=client.ci_ruc if client else None,
+            valor_total=p.valor_total,
+            metodo=p.metodo,
+            fecha_pago=p.fecha_pago,
+            grupo_pagamento=p.grupo_pagamento,
+            invoices_count=len(p.allocations),
+            recibido_por=p.recibido_por,
+            anulada=bool(p.anulada),
+            anulada_por=p.anulada_por,
+            anulada_at=p.anulada_at,
+            motivo_anulacion=p.motivo_anulacion,
+            mi_caja=bool(sesion_id and p.cash_session_id == sesion_id),
+            emission_id=str(em.id) if em else None,
+            emission_status=(em.status.value if em and hasattr(em.status, "value")
+                             else (str(em.status) if em else None)),
+            emission_numero=em.numero_documento if em else None,
+            emission_cdc=em.cdc if em else None,
+            emission_at=(em.finished_at or em.created_at) if em else None,
+            emission_xml_pendiente=bool(
+                em and str(getattr(em.status, "value", em.status)) == "EMITIDA"
+                and not em.xml_r2_key),
+        ))
+    return rows
 
 
 @router.get("/", response_model=List[PaymentHistory])

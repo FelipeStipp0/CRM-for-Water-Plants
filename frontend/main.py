@@ -420,6 +420,7 @@ def _wmapp_filtered_print(*args, **kwargs):
 
 builtins.print = _wmapp_filtered_print
 
+from components.app_modal import AppModal, ModalAction
 from components.sidebar import Sidebar
 from components.status_bar import StatusBar
 from components.theme import COLORS, SPACING, create_app_theme
@@ -456,6 +457,10 @@ class WMApp:
         "/readings": "readings",
         "/invoices": "invoices",
         "/products": "invoices",
+        # Modo Caja deixou de ser exclusivo do cajero dedicado: é módulo do menu
+        # para quem tem permissão (o master passa por qualquer escopo). Quem só
+        # tem o escopo "caja" continua caindo direto na tela cheia no login.
+        "/caja": ("caja", "payments"),
         "/payments": "payments",
         "/cutoff": "cutoff",
         "/finance": "finance",
@@ -485,6 +490,10 @@ class WMApp:
         self._settings_view = None
         self._profile_view = None
         self.splash: SplashView | None = None
+        self.caja_view = None
+        # Turno de caja que continua aberto depois de voltar ao menu: é o que
+        # mantém o aviso ao tentar fechar o app com dinheiro na gaveta.
+        self._caja_sesion_abierta = None
         self.error_log_path = Path(__file__).resolve().parent / "runtime_errors.log"
 
         api.set_unauthorized_handler(self._handle_session_expired)
@@ -690,15 +699,82 @@ class WMApp:
         scopes = self.current_user.get("scopes", []) or []
         return "caja" in scopes and "*" not in scopes
 
-    def _show_caja_layout(self):
+    def _show_caja_layout(self, on_exit=None):
+        """
+        Modo Caja em tela cheia.
+
+        `on_exit` só é passado quando a caja foi aberta pelo menu: aí ela é um
+        módulo, cobre a tela toda para o cajero não se perder no meio do
+        atendimento, e volta com «Volver al menú». No cajero dedicado (escopo só
+        `caja`) não há para onde voltar, e a saída continua sendo o logout.
+        """
         self.page.controls.clear()
         self.caja_view = CajaView(
             show_snackbar=self.show_snackbar,
             current_user=self.current_user,
             on_logout=self._logout,
+            on_exit=on_exit,
         )
         self.page.add(self.caja_view)
         self.page.update()
+
+    def _open_caja_module(self):
+        """Abre a caja pelo menu e volta ao layout principal quando ela pedir."""
+        def _back(sesion):
+            caja = getattr(self, "caja_view", None)
+            if caja is not None:
+                try:
+                    caja.stop()
+                except Exception as err:  # noqa: BLE001
+                    print(f"[WMApp] caja_stop_error err={err}")
+                self.caja_view = None
+            # Turno aberto continua sendo dinheiro na gaveta: o guard da janela
+            # fica instalado, agora com o aviso do próprio menu.
+            self._caja_sesion_abierta = sesion or None
+            self._guard_window_por_caja()
+            self.current_route = "/dashboard"
+            self._show_main_layout()
+
+        self._show_caja_layout(on_exit=_back)
+
+    def _guard_window_por_caja(self):
+        """
+        Impede fechar o app com turno de caja aberto, mesmo fora do Modo Caja.
+
+        Sem isto, sair para o menu com a caja aberta abria a porta para fechar o
+        sistema sem contar o efectivo — e o cierre é o que dá confiança à gaveta.
+        """
+        sesion = getattr(self, "_caja_sesion_abierta", None)
+        try:
+            self.page.window.prevent_close = bool(sesion)
+            self.page.window.on_event = self._on_window_event_caja if sesion else None
+            self.page.update()
+        except Exception as err:  # noqa: BLE001
+            print(f"[WMApp] caja_guard_window_error err={err}")
+
+    def _on_window_event_caja(self, e):
+        if getattr(e, "type", None) != ft.WindowEventType.CLOSE:
+            return
+        sesion = getattr(self, "_caja_sesion_abierta", None)
+        if not sesion:
+            return
+        modal = AppModal(
+            page=self.page,
+            title=f"Caja {sesion.get('numero_fmt', '')} abierta",
+            content=ft.Column([
+                ft.Text(
+                    "Hay un turno de caja abierto: hay que contar el efectivo y "
+                    "registrar la diferencia antes de cerrar el sistema.",
+                    size=13, color=COLORS["text_secondary"]),
+            ], spacing=10, tight=True),
+            actions=[
+                ModalAction(t("common.cancel"), on_click=lambda ev: modal.close()),
+                ModalAction("Ir a la Caja", primary=True,
+                            on_click=lambda ev: (modal.close(), self._navigate("/caja"))),
+            ],
+            width_pct=0.36,
+        )
+        modal.open()
 
     def _user_has_scope(self, required_scope):
         if required_scope is None:
@@ -803,6 +879,8 @@ class WMApp:
             except Exception:
                 pass
             self.caja_view = None
+        self._caja_sesion_abierta = None
+        self._guard_window_por_caja()
         auth_service.logout()
         self.current_user = None
         self.current_route = "/dashboard"
@@ -828,6 +906,13 @@ class WMApp:
         if not self._user_has_scope(required_scope):
             self.show_snackbar(t("app.permission_denied"), error=True)
             route = self._first_allowed_route()
+
+        # A caja não mora na área de conteúdo: ela toma a tela toda (é o balcão,
+        # com o cliente do outro lado esperando) e volta pelo «Volver al menú».
+        if route == "/caja":
+            self.current_route = route
+            self._open_caja_module()
+            return
 
         self.current_route = route
 
@@ -916,6 +1001,7 @@ class WMApp:
             "/readings": lambda: ReadingsView(show_snackbar=self.show_snackbar),
             "/invoices": lambda: InvoicesView(show_snackbar=self.show_snackbar),
             "/products": lambda: ProductsView(show_snackbar=self.show_snackbar),
+            # "/caja" não passa por aqui: `_navigate` a abre em tela cheia.
             "/payments": lambda: PaymentsView(show_snackbar=self.show_snackbar),
             "/cutoff": lambda: CutoffView(show_snackbar=self.show_snackbar),
             "/finance": lambda: FinanceView(show_snackbar=self.show_snackbar),

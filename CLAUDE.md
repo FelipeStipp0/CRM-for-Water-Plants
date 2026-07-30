@@ -81,8 +81,8 @@ backend/app/
 
 ### Routers (`app.include_router` em `main.py`)
 `/auth` · `/clients` · `/readings` · `/invoices` · `/payments` · `/products` · `/settings`
-· `/finance` · `/sponsors` · `/cutoff` (+ `/cutoff/qr/*` público) · `/upload` · `/map`
-· `/sifen` · `/whatsapp`
+· `/finance` · `/caja` · `/agreements` · `/sponsors` · `/cutoff` (+ `/cutoff/qr/*` público)
+· `/upload` · `/map` · `/sifen` · `/whatsapp`
 
 ### Models principais
 - `Organization` (em `wmapp_admin`) — slug, connectionString criptografada.
@@ -92,12 +92,18 @@ backend/app/
 - Finanças: `CashTransaction`, `Expense`, `Employee`, `Payroll`.
 - Subsídios: `SponsorDebt`, `SponsorInvoice`.
 - `CutoffNotice` — workflow de corte (estados + tokens QR).
+- `CashSession` — turno de caja (apertura → cobrança → cierre).
+- `PaymentAgreement` — acordo de pagamento (parcelamento): parcelas agendadas + vínculo com
+  as faturas antigas anuladas. Um ATIVO por cliente.
 
 ### Services principais
 - `payment_distribution.py` — distribui o pagamento nas faturas (mais antiga→recente),
   aplica subsídio, gera `numero_recibo`, dispara auto-exit/auto-reativação.
 - `cutoff_service.py` — workflow de corte/reativação (ver fluxo abaixo).
 - `invoice_generation.py` — geração mensal de faturas (independentes, sem carry-over).
+- `agreement_service.py` — acordo de pagamento: anula a dívida velha (saldo zerado), agenda
+  as parcelas, aplica a cuota na fatura do mês e fecha o acordo na última parcela.
+- `caja_service.py` — turno de caja: apertura, sangría/reposición, efectivo esperado, cierre.
 - `client_matching.py`, `sponsor_service.py`.
 
 ---
@@ -115,6 +121,12 @@ backend/app/
 - **Corte** (`CutoffNotice.status`): `EM_LISTA → EM_AVISO → EM_CONTAGEM → PRONTO_PARA_CORTE → CORTADO`.
   Cada etapa pode ser confirmada por **QR** (entregador/técnico via app mobile) ou manualmente.
   A **nota de corte** imprime horário de atención + dados bancários (obrigatórios, sem fallback).
+- **Acuerdo de pago** (parcelamento, fechado no balcão): as faturas escolhidas viram
+  `ANULADA` **com `saldo_devedor` zerado** e a dívida passa a viver em parcelas, somadas à
+  fatura de consumo do mês correspondente (`Invoice.cuota_valor`, com IVA próprio escolhido no
+  acordo). Total = soma exata dos saldos, sem juros; última parcela absorve a sobra da divisão.
+  Um acordo ativo por cliente — dívida nova refaz o acordo. Parcela vencida cai no fluxo de
+  corte porque quem vence é a própria fatura do mês.
 - **Auto-exit**: se o cliente paga toda a dívida **antes** do corte, sai do workflow.
 - **Reativação automática**: se um cliente **CORTADO** paga a dívida, `check_auto_reactivation_for_client`
   dispara a reativação (registra a taxa, gera QR, **comprobante = `numero_recibo`**), e o
@@ -147,7 +159,10 @@ backend/app/
 
 - **[AI_CONTEXT.md](docs/AI_CONTEXT.md)** — guia de navegação p/ IA (onde mexer, mapa de referência do Flet).
 - **[architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md)** — arquitetura de ponta a ponta.
-- **[CHANGES_2026-06.md](docs/CHANGES_2026-06.md)** — mudanças recentes (Flet, recibo, reativação auto, i18n, mapa).
+- **[CHANGES_2026-07.md](docs/CHANGES_2026-07.md)** — Modo Caja completo (busca, cadastro no balcão,
+  otros cargos, cobro parcial, acuerdo de pago, anular/reimprimir, sangría/cierre às cegas, teclado).
+  Plano de origem: [PLANO_CAJA.md](docs/PLANO_CAJA.md).
+- **[CHANGES_2026-06.md](docs/CHANGES_2026-06.md)** — mudanças anteriores (Flet, recibo, reativação auto, i18n, mapa).
 - **Flet: doc oficial** em `flet/website/docs/` (fonte de verdade da API). [FLET_API_GOTCHAS.md](docs/FLET_API_GOTCHAS.md) — só o específico deste app (exe branded, `AppModal`).
 - [functional_documentation.md](docs/functional_documentation.md) — funcionalidades por módulo.
 - [workflow_documentation.md](docs/workflow_documentation.md) — lógica de faturamento/corte/recursividade.

@@ -37,6 +37,22 @@ def to_local(value: Union[str, datetime, None]) -> Optional[datetime]:
     return dt.astimezone()
 
 
+def local_day_range_utc(dia: date) -> tuple[str, str]:
+    """
+    Um dia do calendário local como intervalo UTC em ISO — (desde, hasta).
+
+    O backend guarda instantes em UTC e não sabe o fuso do balcão; filtrar "hoy"
+    comparando data crua trocaria de dia toda noite (Paraguai é UTC−3/−4). Quem
+    sabe o fuso é esta máquina, então a conversão acontece aqui.
+    """
+    inicio_local = datetime(dia.year, dia.month, dia.day).astimezone()
+    fin_local = datetime(dia.year, dia.month, dia.day, 23, 59, 59).astimezone()
+    return (
+        inicio_local.astimezone(timezone.utc).replace(tzinfo=None).isoformat(),
+        fin_local.astimezone(timezone.utc).replace(tzinfo=None).isoformat(),
+    )
+
+
 def format_local(value: Union[str, datetime, None], fmt: str = "%d/%m/%Y %H:%M") -> str:
     """Formata na hora local um instante vindo do backend (UTC)."""
     dt = to_local(value)

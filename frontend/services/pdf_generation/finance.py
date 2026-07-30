@@ -212,6 +212,14 @@ class CierreCajaP80Generator(PDFGenerator):
             row("Cheques:", format_gs(sesion.get("ingresos_cheque")))
         if _f(sesion.get("estornos_efectivo_previos")):
             row("Anulaciones:", f"- {format_gs(sesion.get('estornos_efectivo_previos'))}")
+        # Dinheiro que saiu/entrou da gaveta sem ser cobrança: sem estas linhas o
+        # esperado impresso não fecharia com as contas do próprio comprobante.
+        if _f(sesion.get("sangrias_total")):
+            row(f"Sangrías ({int(sesion.get('sangrias_cantidad', 0) or 0)}):",
+                f"- {format_gs(sesion.get('sangrias_total'))}")
+        if _f(sesion.get("reposiciones_total")):
+            row(f"Reposiciones ({int(sesion.get('reposiciones_cantidad', 0) or 0)}):",
+                format_gs(sesion.get("reposiciones_total")))
         rule()
 
         # --- Conferência da gaveta ---

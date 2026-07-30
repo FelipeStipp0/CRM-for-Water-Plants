@@ -96,6 +96,9 @@ class PaymentResult(BaseModel):
     reactivation_notice_id: Optional[str] = None
     reactivation_qr_token: Optional[str] = None
     reactivation_comprobante: Optional[str] = None
+    # Acordo de pagamento quitado por este pagamento (ultima parcela). Traz as
+    # faturas antigas anuladas pelo acordo, que a caja imprime junto do recibo.
+    acuerdo_quitado: Optional[dict] = None
 
 
 class PaymentHistory(BaseModel):
@@ -107,3 +110,38 @@ class PaymentHistory(BaseModel):
     metodo: PaymentMethod
     fecha_pago: datetime
     invoices_count: int
+
+
+class AtencionRow(BaseModel):
+    """
+    Um atendimento anterior, como o balcao precisa dele.
+
+    Serve para reimprimir (recibo e KuDE), anular e conferir o turno: por isso
+    carrega o grupo (chave da reimpressao do recibo), o estado da anulacao e o
+    estado da factura electronica, incluindo se ainda esta no prazo de
+    cancelacion que o proprio KuDE imprime.
+    """
+    id: str
+    numero_recibo: Optional[int] = None
+    numero_recibo_fmt: str = "—"
+    client_id: str
+    client_name: str
+    client_ci_ruc: Optional[str] = None
+    valor_total: Decimal
+    metodo: PaymentMethod
+    fecha_pago: datetime
+    grupo_pagamento: str
+    invoices_count: int
+    recibido_por: Optional[str] = None
+    anulada: bool = False
+    anulada_por: Optional[str] = None
+    anulada_at: Optional[datetime] = None
+    motivo_anulacion: Optional[str] = None
+    mi_caja: bool = False           # cobrado no turno de caja aberto agora
+    # Factura electronica deste cobro (None quando saiu apenas recibo)
+    emission_id: Optional[str] = None
+    emission_status: Optional[str] = None
+    emission_numero: Optional[str] = None
+    emission_cdc: Optional[str] = None
+    emission_at: Optional[datetime] = None
+    emission_xml_pendiente: bool = False

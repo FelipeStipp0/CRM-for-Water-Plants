@@ -36,6 +36,31 @@ class PaymentService:
         """Busca pagamento pelo grupo_pagamento."""
         return api.get(f"/payments/by-group/{grupo}")
 
+    def atenciones(
+        self,
+        q: Optional[str] = None,
+        desde: Optional[str] = None,
+        hasta: Optional[str] = None,
+        solo_mi_caja: bool = False,
+        limit: int = 20,
+    ) -> list[dict]:
+        """
+        Atendimentos anteriores para o balcão: reimprimir, anular e conferir.
+
+        `q` casa com nº de recibo, nome ou CI/RUC. `desde`/`hasta` são ISO **em
+        UTC** — quem sabe o fuso do balcão é o app, não o servidor.
+        """
+        params: dict = {"limit": limit}
+        if q:
+            params["q"] = q
+        if desde:
+            params["desde"] = desde
+        if hasta:
+            params["hasta"] = hasta
+        if solo_mi_caja:
+            params["solo_mi_caja"] = True
+        return api.get("/payments/atenciones", params=params)
+
     def list_by_client(self, client_id: str, limit: int = 24) -> list[dict]:
         """Lista historico de pagamentos por cliente."""
         return api.get(f"/payments/client/{client_id}", params={"limit": limit})

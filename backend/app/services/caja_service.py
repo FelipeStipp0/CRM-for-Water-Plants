@@ -10,9 +10,14 @@ Numeracao: `Counter("cash_session")` da o `numero` sequencial na ordem de
 apertura ("Caja 07"). Global e monotonico — nunca reinicia.
 
 Efectivo esperado na gaveta = monto_inicial + ingresos en efectivo − estornos
-en efectivo. Pagamentos ANULADOS nao entram nos ingressos (o estorno ja os
-tirou); o estorno pesa na sessao em que foi FEITO, que e de onde o dinheiro saiu.
-Estorno de pagamento por transferencia/cheque nao mexe na gaveta.
+en efectivo − sangrias + reposiciones. Pagamentos ANULADOS nao entram nos
+ingressos (o estorno ja os tirou); o estorno pesa na sessao em que foi FEITO, que
+e de onde o dinheiro saiu. Estorno de pagamento por transferencia/cheque nao mexe
+na gaveta.
+
+Sangria e reposicion: dinheiro que sai/entra da gaveta sem ser cobranca (levar ao
+banco, repor troco). Sem elas o esperado mente assim que alguem leva dinheiro ao
+banco no meio do turno.
 """
 
 from datetime import datetime
@@ -26,6 +31,7 @@ from app.models.payment import Payment, PaymentMethod
 from app.models.finance import (
     CashTransaction,
     TransactionCategory,
+    TransactionType,
     CashSession,
     CashSessionStatus,
 )
@@ -103,9 +109,22 @@ async def computar_sesion(sesion: CashSession) -> dict:
         if orig.cash_session_id != sesion.id:
             estornos_efectivo_previos += e.valor
 
+    # Sangrias e reposiciones do turno: dinheiro que saiu/entrou da gaveta sem
+    # ser cobranca. Contam sempre em efectivo — e a gaveta que se abre.
+    movs = await CashTransaction.find(
+        CashTransaction.cash_session_id == sesion.id,
+        {"categoria": {"$in": [TransactionCategory.SANGRIA_CAJA.value,
+                               TransactionCategory.REPOSICION_CAJA.value]}},
+    ).to_list()
+    sangrias = [m for m in movs if m.categoria == TransactionCategory.SANGRIA_CAJA]
+    reposiciones = [m for m in movs if m.categoria == TransactionCategory.REPOSICION_CAJA]
+    sangrias_total = sum((m.valor for m in sangrias), Decimal("0"))
+    reposiciones_total = sum((m.valor for m in reposiciones), Decimal("0"))
+
     ingresos_efectivo = por_metodo[PaymentMethod.EFECTIVO.value]
     ingresos_total = sum(por_metodo.values(), Decimal("0"))
-    esperado = sesion.monto_inicial + ingresos_efectivo - estornos_efectivo_previos
+    esperado = (sesion.monto_inicial + ingresos_efectivo - estornos_efectivo_previos
+                - sangrias_total + reposiciones_total)
 
     return {
         "id": str(sesion.id),
@@ -125,8 +144,77 @@ async def computar_sesion(sesion: CashSession) -> dict:
         "estornos_total": estornos_total,
         "estornos_efectivo": estornos_efectivo,
         "estornos_efectivo_previos": estornos_efectivo_previos,
+        "sangrias_cantidad": len(sangrias),
+        "sangrias_total": sangrias_total,
+        "reposiciones_cantidad": len(reposiciones),
+        "reposiciones_total": reposiciones_total,
         "efectivo_esperado": esperado,
     }
+
+
+async def registrar_movimiento(
+    sesion: CashSession, categoria: TransactionCategory, valor: Decimal,
+    descripcion: str, usuario: str,
+) -> CashTransaction:
+    """
+    Lanca uma sangria (SAIDA) ou reposicion (ENTRADA) no turno aberto.
+
+    Nao mexe em faturas nem em recibos: e dinheiro da gaveta trocando de lugar.
+    Entra direto no efectivo esperado do cierre.
+    """
+    if sesion.status != CashSessionStatus.ABIERTA:
+        raise CajaError(f"La Caja {sesion.numero_fmt} ya fue cerrada")
+    valor = Decimal(str(valor or 0))
+    if valor <= 0:
+        raise CajaError("El monto tiene que ser mayor a cero")
+    if categoria not in (TransactionCategory.SANGRIA_CAJA,
+                         TransactionCategory.REPOSICION_CAJA):
+        raise CajaError("Movimiento de caja no permitido")
+    if not (descripcion or "").strip():
+        raise CajaError("Indicá el motivo del movimiento")
+
+    es_sangria = categoria == TransactionCategory.SANGRIA_CAJA
+    if es_sangria:
+        # Nao se tira da gaveta mais do que ha nela: o esperado ficaria negativo
+        # e o cierre passaria a mentir para o outro lado.
+        r = await computar_sesion(sesion)
+        disponible = Decimal(str(r["efectivo_esperado"]))
+        if valor > disponible:
+            raise CajaError(
+                f"En la gaveta hay {disponible:.0f} Gs. — no podés sacar {valor:.0f} Gs.")
+
+    mov = CashTransaction(
+        tipo=TransactionType.SAIDA if es_sangria else TransactionType.ENTRADA,
+        categoria=categoria,
+        valor=valor,
+        descripcion=descripcion.strip(),
+        reference_type="caja_movimiento",
+        registrado_por=usuario,
+        cash_session_id=sesion.id,
+    )
+    await mov.insert()
+    return mov
+
+
+async def listar_movimientos(sesion: CashSession) -> list[dict]:
+    """Sangrias e reposiciones do turno, mais recentes primeiro."""
+    movs = await CashTransaction.find(
+        CashTransaction.cash_session_id == sesion.id,
+        {"categoria": {"$in": [TransactionCategory.SANGRIA_CAJA.value,
+                               TransactionCategory.REPOSICION_CAJA.value]}},
+    ).sort("-fecha").to_list()
+    return [
+        {
+            "id": str(m.id),
+            "categoria": m.categoria.value if hasattr(m.categoria, "value") else str(m.categoria),
+            "tipo": m.tipo.value if hasattr(m.tipo, "value") else str(m.tipo),
+            "valor": m.valor,
+            "descripcion": m.descripcion,
+            "fecha": m.fecha,
+            "registrado_por": m.registrado_por,
+        }
+        for m in movs
+    ]
 
 
 async def cerrar_caja(
@@ -153,6 +241,10 @@ async def cerrar_caja(
     sesion.estornos_total = r["estornos_total"]
     sesion.estornos_efectivo = r["estornos_efectivo"]
     sesion.estornos_efectivo_previos = r["estornos_efectivo_previos"]
+    sesion.sangrias_cantidad = r["sangrias_cantidad"]
+    sesion.sangrias_total = r["sangrias_total"]
+    sesion.reposiciones_cantidad = r["reposiciones_cantidad"]
+    sesion.reposiciones_total = r["reposiciones_total"]
     sesion.efectivo_esperado = esperado
     sesion.efectivo_fisico = fisico
     sesion.diferencia = fisico - esperado

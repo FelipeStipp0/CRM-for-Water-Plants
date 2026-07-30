@@ -69,6 +69,9 @@ class DistributionResult:
     reactivation_notice_id: Optional[PydanticObjectId] = None
     reactivation_qr_token: Optional[str] = None
     reactivation_comprobante: Optional[str] = None
+    # Acordo de pagamento QUITADO por este pagamento (ultima parcela): a caja
+    # imprime as faturas antigas junto do recibo, como prova de que acabou.
+    acuerdo_quitado: Optional[dict] = None
 
     def __post_init__(self):
         if self.sponsor_debts_created is None:
@@ -393,6 +396,15 @@ class PaymentDistributionService:
         )
         await transaction.insert()
 
+        # Acordo de pagamento: marca como pagas as parcelas cujas faturas foram
+        # quitadas aqui. Devolve o acordo so quando ele acabou de ser quitado.
+        from app.services.agreement_service import on_invoices_paid
+        acuerdo_quitado = await on_invoices_paid(
+            client_id,
+            [a.invoice_id for a in allocations
+             if a.status_final == InvoiceStatus.PAGADA],
+        )
+
         # Auto-exit do workflow de corte se cliente pagou toda divida (antes do corte)
         from app.services.cutoff_service import CutoffService
         await CutoffService.check_auto_exit_for_client(client_id)
@@ -413,4 +425,5 @@ class PaymentDistributionService:
             reactivation_notice_id=reactivation.cutoff_notice_id if reactivation else None,
             reactivation_qr_token=reactivation.qr_token if reactivation else None,
             reactivation_comprobante=reactivation.comprobante if reactivation else None,
+            acuerdo_quitado=acuerdo_quitado,
         )

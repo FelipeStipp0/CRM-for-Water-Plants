@@ -18,6 +18,13 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from xml.etree import ElementTree as ET
 
+from config.fiscal import (
+    LEYENDA_KUDE_L1,
+    LEYENDA_KUDE_L2,
+    LEYENDA_KUDE_L3,
+    LEYENDA_KUDE_UNA_LINEA,
+)
+
 try:
     from reportlab.lib.units import mm
     from reportlab.lib import colors
@@ -386,9 +393,11 @@ def _build_story(xml_bytes: bytes) -> list:
     St.append(_p("ESTE DOCUMENTO ES UNA REPRESENTACIÓN GRÁFICA", sFt))
     St.append(_p("DE UN DOCUMENTO ELECTRÓNICO (XML)", sFt))
     St.append(_sp(1))
-    St.append(_p("Si su documento electrónico presenta algún error,", sFt))
-    St.append(_p("solicite la modificación dentro de las 72 horas", sFt))
-    St.append(_p("siguientes de la emisión de este comprobante.", sFt))
+    # O prazo vem de config.fiscal: a legenda impressa e o aviso da caja têm de
+    # dizer o mesmo número, e ele muda num ponto só.
+    St.append(_p(LEYENDA_KUDE_L1, sFt))
+    St.append(_p(LEYENDA_KUDE_L2, sFt))
+    St.append(_p(LEYENDA_KUDE_L3, sFt))
     St.append(_sp(5))
     return St
 
@@ -611,8 +620,7 @@ def gerar_kude_a4(doc_data: dict):
             ("Courier-Bold", cdc_fs, 8 * mm, colors.black, cdc_txt),
             ("Helvetica", 6.5, 7.5 * mm, colors.black,
              "ESTE DOCUMENTO ES UNA REPRESENTACIÓN GRÁFICA DE UN DOCUMENTO ELECTRÓNICO (XML)"),
-            ("Helvetica", 6.5, 3.5 * mm, colors.black,
-             "Si su documento electrónico presenta algún error, solicite la modificación dentro de las 72 horas."),
+            ("Helvetica", 6.5, 3.5 * mm, colors.black, LEYENDA_KUDE_UNA_LINEA),
         ]
         # centra o bloco de texto na altura do QR, em vez de empilhar tudo no topo
         altura_bloco = sum(esp for _, _, esp, _, _ in linhas)

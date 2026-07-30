@@ -111,6 +111,21 @@ class Invoice(OrgDocument):
     # Numero sequencial unico da fatura
     numero_factura: Optional[int] = None
 
+    # ---- Cuota de acordo de pagamento (parcelamento) ----
+    # A parcela NAO reaproveita `items` (que sao so de AVULSA) nem o IVA global das
+    # configuracoes: ela tem valor, tasa e afetacao proprios, escolhidos ao fechar o
+    # acordo. `valor_total`/`saldo_devedor` desta fatura JA incluem `cuota_valor` —
+    # o campo existe para a factura legal poder separar "cuota" de "agua" e para o
+    # balcao poder dizer ao cliente o que esta cobrando.
+    cuota_valor: Optional[MongoDecimal] = None
+    cuota_iva_tasa: Optional[int] = None
+    cuota_iva_afectacion: Optional[int] = None
+    cuota_numero: Optional[int] = None                      # 3 de 6, por exemplo
+    agreement_id: Optional[PydanticObjectId] = None         # acordo que gerou a cuota
+
+    # Acordo que ANULOU esta fatura (a divida velha virou parcelas).
+    anulada_por_acuerdo_id: Optional[PydanticObjectId] = None
+
     # Referencia a leitura que gerou esta fatura (se tipo=CONSUMO)
     reading_id: Optional[PydanticObjectId] = None
 
@@ -129,6 +144,8 @@ class Invoice(OrgDocument):
             [("client.$id", 1), ("ano_referencia", -1), ("mes_referencia", -1)],
             [("status", 1), ("fecha_vencimiento", 1)],
             [("fecha_emision", -1)],
+            [("agreement_id", 1)],
+            [("anulada_por_acuerdo_id", 1)],
             IndexModel(
                 [("numero_factura", ASCENDING)],
                 unique=True,

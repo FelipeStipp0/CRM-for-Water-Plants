@@ -32,6 +32,9 @@ class TransactionCategory(str, Enum):
     TAXA_REATIVACAO = "TAXA_REATIVACAO"
     VENDA_MATERIAL = "VENDA_MATERIAL"
     OUTROS_ENTRADA = "OUTROS_ENTRADA"
+    # Dinheiro reposto na gaveta durante o turno (troco que faltou, devolucao
+    # de sangria). ENTRADA que NAO e cobranca de ninguem.
+    REPOSICION_CAJA = "REPOSICION_CAJA"
     # Saidas
     SALARIO = "SALARIO"
     ADIANTAMENTO = "ADIANTAMENTO"
@@ -40,6 +43,10 @@ class TransactionCategory(str, Enum):
     DESPESA_MANUTENCAO = "DESPESA_MANUTENCAO"
     OUTROS_SAIDA = "OUTROS_SAIDA"
     ESTORNO_PAGAMENTO = "ESTORNO_PAGAMENTO"  # Compensa a ENTRADA de um pagamento anulado
+    # Dinheiro que SAI da gaveta no meio do turno (levado ao banco, ao cofre ou
+    # entregue a tesouraria). Sem isto o efectivo esperado mente assim que
+    # alguem tira dinheiro do caixa.
+    SANGRIA_CAJA = "SANGRIA_CAJA"
 
 
 class CashTransaction(OrgDocument):
@@ -308,7 +315,15 @@ class CashSession(OrgDocument):
     # da gaveta (anular um pagamento do proprio turno ja o tira dos ingressos).
     estornos_efectivo_previos: MongoDecimal = Decimal("0")
 
-    efectivo_esperado: MongoDecimal = Decimal("0")  # inicial + efectivo − estornos previos
+    # Dinheiro que entrou/saiu da gaveta sem ser cobranca: sangria (levado ao
+    # banco/cofre) e reposicion (troco devolvido). Pesam no efectivo esperado.
+    sangrias_cantidad: int = 0
+    sangrias_total: MongoDecimal = Decimal("0")
+    reposiciones_cantidad: int = 0
+    reposiciones_total: MongoDecimal = Decimal("0")
+
+    # inicial + efectivo − estornos previos − sangrias + reposiciones
+    efectivo_esperado: MongoDecimal = Decimal("0")
     efectivo_fisico: MongoDecimal = Decimal("0")     # contado pelo operador
     diferencia: MongoDecimal = Decimal("0")          # fisico − esperado
 

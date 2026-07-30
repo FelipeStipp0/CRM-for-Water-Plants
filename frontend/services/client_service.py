@@ -31,7 +31,25 @@ class ClientService:
             params["is_sponsor"] = is_sponsor
         
         return api.get("/clients/search", params=params)
-    
+
+    def search_paged(
+        self,
+        query: Optional[str] = None,
+        limit: int = 20,
+    ) -> tuple[List[dict], int]:
+        """
+        Busca devolvendo (resultados, total_que_casou).
+
+        O balcão pede poucos resultados de propósito (a lista tem de caber na
+        tela), e precisa do total para dizer "20 de 137" em vez de esconder o
+        resto sem avisar.
+        """
+        params: dict = {"limit": limit}
+        if query:
+            params["q"] = query
+        return api.get_with_total("/clients/search", params=params)
+
+
     def list(self, skip: int = 0, limit: int = 50, status: Optional[str] = None) -> List[dict]:
         """Lista clientes com paginação."""
         params = {"skip": skip, "limit": limit}

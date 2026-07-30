@@ -1,16 +1,31 @@
 """
 WMApp Frontend - Modo Caja (cobrança do dia a dia).
 
-Tela cheia dedicada ao caixa: busca cliente -> grade de meses (pago/pendente/
-adiantar) -> cobro direcionado e/ou adiantamento -> imprime recibo. Marca branca
-(logo/nome da junta vêm de SystemSettings). O cajero cai direto aqui no login.
+Tela do balcão: busca cliente → o que ele deve (meses de água + otros cargos) →
+cobro (total ou parcial) → recibo, e factura legal quando for pedida. Marca branca
+(logo/nome da junta vêm de SystemSettings).
+
+Premissa que manda no desenho: **a junta não tem setores.** Quem está no caixa
+cadastra, cobra, corrige, parcela e administra. Nenhum fluxo depende de "outra
+pessoa resolve depois", e por isso a tela tem tudo:
+
+- cadastro de cliente completo, aberto de dentro da cobrança (Fase 1);
+- otros cargos da tesouraria (faturas AVULSA) na mesma conta (Fase 2.1);
+- cobro parcial: "valor a cobrar" separado de "recibí" (Fase 2.2);
+- acuerdo de pago / parcelamento (Fase 3);
+- anular cobro no próprio balcão, com motivo (Fase 4);
+- reimprimir recibo e KuDE de atendimentos anteriores (Fase 5);
+- sangría, reposición, resumo do turno e cierre às cegas (Fase 6);
+- teclado ponta a ponta e atendimentos em espera (Fase 7).
+
+Quem só tem o escopo `caja` cai aqui direto no login (tela cheia, sem menu). Quem
+tem acesso amplo entra pelo módulo do menu e volta com «Volver al menú»
+(`on_exit`).
 
 Reusa a infra já pronta:
-- GET /clients/{id}/payment-context  -> grade_meses + saldo + faturas + tarifa_base
+- GET /clients/{id}/payment-context  → grade_meses + otros_cargos + saldo + acuerdo
 - POST /payments/  com invoice_ids (direcionado) e prepay_periods (adiantamento)
 - Impressão P80 (mesmos geradores do payments_view)
-
-Factura legal (SIFEN) + conferência de dados: próximo bloco.
 """
 
 import threading
@@ -20,17 +35,26 @@ from datetime import datetime
 import flet as ft
 
 from components.app_modal import AppModal, ModalAction
+from components.caja_acuerdo import open_acuerdo_dialog
+from components.caja_atenciones import open_atenciones_dialog
+from components.caja_efectivo import (
+    REPOSICION, SANGRIA, open_movimiento_dialog, open_resumen_dialog,
+)
+from components.client_form import open_client_form
 from components.sifen_progress import open_sifen_progress
-from components.theme import COLORS, FONTS, SPACING, RADIUS, create_text_field
+from components.theme import COLORS, SPACING, RADIUS, create_text_field
 from services.sifen_service import sifen_service
 from config.local_settings import get_api_url
 from services.api_client import APIError
+from services.auth_service import auth_service
 from services.caja_service import caja_service
 from services.client_service import client_service
 from services.cutoff_service import cutoff_service
+from services.invoice_service import invoice_service
 from services.payment_service import payment_service
 from services.settings_service import settings_service
 from services.pdf_generation.finance import CierreCajaP80Generator
+from services.pdf_generation.invoices import InvoiceP80Generator
 from services.pdf_generation.receipts import PaymentReceiptP80Generator
 from services.pdf_generation.notifications import ReactivationRequestGenerator
 from services.pdf_generation.printer_manager import printer_manager
@@ -40,6 +64,11 @@ from i18n import t
 
 _MES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
 _DIA = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+
+# Fim do mundo para ordenar: pseudo-fatura de adiantamento (que ainda não existe)
+# entra depois das faturas reais do mesmo período, igual ao backend, que a cria
+# agora e ordena por fecha_emision.
+_FUTURO = "9999-12-31T23:59:59"
 
 
 def _money(v) -> str:
@@ -54,11 +83,21 @@ class CajaView(ft.Container):
     MESES_FUTURO_INICIAL = 6
     MESES_FUTURO_MAX = 36
 
-    def __init__(self, show_snackbar, current_user: dict, on_logout=None):
+    # Busca: poucos resultados de propósito (a lista tem de caber na tela), mas
+    # com o total à vista — esconder do 5º em diante sem avisar era o defeito.
+    BUSCA_LIMIT = 20
+    BUSCA_ALTURA_FILA = 50   # dois textos + padding 8+8
+    BUSCA_ESPACIO = 6
+    BUSCA_ALTURA_MAX = 340
+
+    def __init__(self, show_snackbar, current_user: dict, on_logout=None, on_exit=None):
         super().__init__()
         self.show_snackbar = show_snackbar
         self.current_user = current_user or {}
         self.on_logout = on_logout
+        # `on_exit` só existe quando a caja foi aberta pelo menu: aí ela é um
+        # módulo e tem para onde voltar. No cajero dedicado ele é None.
+        self.on_exit = on_exit
 
         self.expand = True
         self.bgcolor = COLORS["bg_primary"]
@@ -67,21 +106,38 @@ class CajaView(ft.Container):
         self._clock_timer = None
         self._company = None
         self._search_timer = None
+        # Corrida entre buscas: cada busca leva um número e o resultado só entra
+        # na tela se ainda for o mais novo. Sem isto, a resposta de "jo" chegava
+        # depois de "josé" e sobrescrevia a lista certa.
+        self._search_seq = 0
+        self._search_total = 0
 
         # turno de caja aberto (None = nada cobrável, mostra a tela de apertura)
         self._sesion = None
+        self._pausado = False
 
         # estado da cobrança atual
         self._ctx = None            # payment-context do cliente selecionado
         self._cells = []            # [{ano,mes,estado,saldo,invoice_ids,sel}]
+        self._cargos = []           # otros cargos (AVULSA): [{'f': factura, 'sel': bool}]
+        self._facturas = {}         # id -> factura (para o reparto e a factura legal)
         self._tarifa = 0.0
         self._results = []
         self._meses_futuro = self.MESES_FUTURO_INICIAL
+
+        # atendimentos em espera (só na memória do app: nada foi cobrado ainda)
+        self._espera = []
+
+        # dialogs abertos por esta tela — os atalhos de teclado não disparam
+        # enquanto algum estiver na frente.
+        self._dialogs = []
+        self._prev_keyboard_handler = None
 
         # geradores de PDF (mesmos do payments_view)
         self._g_receipt = PaymentReceiptP80Generator()
         self._g_react = ReactivationRequestGenerator()
         self._g_cierre = CierreCajaP80Generator()
+        self._g_invoice = InvoiceP80Generator()
 
         self._build()
 
@@ -100,6 +156,38 @@ class CajaView(ft.Container):
             except Exception:
                 pass
         fn()
+
+    def _focus(self, ctrl: ft.Control):
+        """
+        Põe o cursor num campo.
+
+        `focus()` é **corrotina** no Flet 0.86: chamada solta ela nunca roda (só
+        deixa um RuntimeWarning) e o cursor não vai para lugar nenhum — o que num
+        balcão que trabalha por teclado quebra o ritmo inteiro. Quem agenda é a
+        página, com `run_task`.
+        """
+        page = None
+        try:
+            page = self.page
+        except Exception:
+            page = None
+        if page is None:
+            return
+        try:
+            page.run_task(ctrl.focus)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Caja] focus_failed err={exc}")
+
+    def _track(self, modal):
+        """Guarda o dialog para os atalhos saberem que há algo na frente."""
+        self._dialogs = [d for d in self._dialogs if getattr(d, "is_open", False)]
+        if modal is not None:
+            self._dialogs.append(modal)
+        return modal
+
+    def _sin_dialogs(self) -> bool:
+        self._dialogs = [d for d in self._dialogs if getattr(d, "is_open", False)]
+        return not self._dialogs
 
     def _get_company(self) -> dict:
         if self._company is None:
@@ -132,6 +220,7 @@ class CajaView(ft.Container):
                 self._clock_timer.cancel()
             except Exception:
                 pass
+        self._restore_keyboard()
         self._sesion = None
         self._guard_window(False)
 
@@ -154,6 +243,35 @@ class CajaView(ft.Container):
             visible=False,
         )
 
+        # Ações do turno: tudo o que o balcão resolve sozinho.
+        self.acciones_row = ft.Row([
+            self._accion(ft.Icons.HISTORY, "Atenciones anteriores — reimprimir o anular (F5)",
+                         self._open_atenciones),
+            self._accion(ft.Icons.SUMMARIZE_OUTLINED, "Resumen del turno (F6)",
+                         self._open_resumen),
+            self._accion(ft.Icons.CALL_MADE, "Sangría: sacar plata de la gaveta (F9)",
+                         lambda: self._open_movimiento(SANGRIA)),
+            self._accion(ft.Icons.CALL_RECEIVED, "Reposición: devolver plata a la gaveta",
+                         lambda: self._open_movimiento(REPOSICION)),
+            self._accion(ft.Icons.PAUSE_CIRCLE_OUTLINE,
+                         "Pausar el cobro sin cerrar la caja (F11)", self._pausar),
+        ], spacing=2, visible=False)
+
+        salida_btn = (
+            ft.TextButton(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.ARROW_BACK, size=15, color=COLORS["text_muted"]),
+                    ft.Text("Volver al menú", size=12, color=COLORS["text_muted"]),
+                ], spacing=6, tight=True),
+                on_click=lambda e: self._volver_al_menu(),
+            )
+            if self.on_exit else
+            ft.TextButton(
+                content=ft.Text("Salir", size=12, color=COLORS["text_muted"]),
+                on_click=lambda e: self._try_logout(),
+            )
+        )
+
         top = ft.Container(
             content=ft.Row(
                 [
@@ -170,6 +288,7 @@ class CajaView(ft.Container):
                         spacing=1,
                     ),
                     ft.Container(expand=True),
+                    self.acciones_row,
                     self.caja_chip,
                     self._clock,
                     ft.Container(width=1, height=20, bgcolor=COLORS["border"]),
@@ -178,10 +297,7 @@ class CajaView(ft.Container):
                         size=13, color=COLORS["text_secondary"],
                     ),
                     self.cerrar_btn,
-                    ft.TextButton(
-                        content=ft.Text("Salir", size=12, color=COLORS["text_muted"]),
-                        on_click=lambda e: self._try_logout(),
-                    ),
+                    salida_btn,
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=13,
@@ -195,13 +311,21 @@ class CajaView(ft.Container):
             [top, ft.Row([self._build_left(), self._build_right()], spacing=0, expand=True)],
             spacing=0, expand=True,
         )
-        # A apertura cobre a cobrança inteira: sem turno aberto não se cobra nada.
-        # StackFit.EXPAND para as duas camadas ocuparem a tela toda (o default
-        # LOOSE deixaria a camada só do tamanho do card).
+        # A apertura (e a pausa) cobrem a cobrança inteira: sem turno aberto, ou
+        # com o turno pausado, não se cobra nada. StackFit.EXPAND para as camadas
+        # ocuparem a tela toda (o default LOOSE deixaria só o tamanho do card).
         self.content = ft.Stack(
-            [cobranza, self._build_apertura()], expand=True, fit=ft.StackFit.EXPAND,
+            [cobranza, self._build_apertura(), self._build_pausa()],
+            expand=True, fit=ft.StackFit.EXPAND,
         )
         self._start_clock()
+
+    def _accion(self, icon, tooltip: str, on_click) -> ft.Control:
+        return ft.IconButton(
+            icon=icon, icon_size=18, tooltip=tooltip,
+            icon_color=COLORS["text_secondary"],
+            on_click=lambda e: on_click(),
+        )
 
     # ------------------------------------------------------- apertura / cierre
     def _build_apertura(self) -> ft.Control:
@@ -227,6 +351,20 @@ class CajaView(ft.Container):
             size=12, color=COLORS["text_muted"],
         )
 
+        acciones = [
+            self.apertura_btn,
+        ]
+        if self.on_exit:
+            acciones.append(ft.TextButton(
+                content=ft.Text("Volver al menú", size=12, color=COLORS["text_muted"]),
+                on_click=lambda e: self._volver_al_menu(),
+            ))
+        else:
+            acciones.append(ft.TextButton(
+                content=ft.Text("Salir", size=12, color=COLORS["text_muted"]),
+                on_click=lambda e: self._try_logout(),
+            ))
+
         card = ft.Container(
             content=ft.Column([
                 ft.Text("Caja cerrada", size=26, weight=ft.FontWeight.W_800, color=COLORS["text_primary"]),
@@ -245,11 +383,7 @@ class CajaView(ft.Container):
                 self.apertura_err,
                 self.apertura_hint,
                 ft.Container(height=6),
-                self.apertura_btn,
-                ft.TextButton(
-                    content=ft.Text("Salir", size=12, color=COLORS["text_muted"]),
-                    on_click=lambda e: self._try_logout(),
-                ),
+                *acciones,
             ], spacing=10, tight=True),
             width=440, padding=ft.Padding.symmetric(horizontal=30, vertical=28),
             bgcolor=COLORS["bg_secondary"], border_radius=RADIUS["lg"],
@@ -264,8 +398,117 @@ class CajaView(ft.Container):
         )
         return self.apertura_layer
 
+    # ------------------------------------------------------------- pausa
+    def _build_pausa(self) -> ft.Control:
+        """
+        Pausa do turno: o cajero sai do balcão sem cerrar a caja.
+
+        A gaveta continua aberta e no nome dele, então quem destranca é ele — com
+        a própria senha. É uma pausa nas cobranças, não uma troca de dono: o
+        cierre segue sendo do mesmo operador, com o esperado acumulado do turno.
+        """
+        self.pausa_pass = ft.TextField(
+            value="", password=True, can_reveal_password=True,
+            hint_text="Tu contraseña", border=ft.InputBorder.NONE,
+            text_style=ft.TextStyle(size=17, color=COLORS["text_primary"]),
+            content_padding=ft.Padding.symmetric(horizontal=0, vertical=8),
+            on_submit=lambda e: self._reanudar(),
+        )
+        self.pausa_err = ft.Text("", size=12, color=COLORS["accent_error"], visible=False)
+        self.pausa_info = ft.Text("", size=13, color=COLORS["text_secondary"])
+
+        card = ft.Container(
+            content=ft.Column([
+                ft.Row([
+                    ft.Icon(ft.Icons.PAUSE_CIRCLE_OUTLINE, size=26,
+                            color=COLORS["accent_warning"]),
+                    ft.Text("Caja en pausa", size=25, weight=ft.FontWeight.W_800,
+                            color=COLORS["text_primary"]),
+                ], spacing=10),
+                self.pausa_info,
+                ft.Text("El turno sigue abierto. Nadie cobra hasta que vuelvas.",
+                        size=13, color=COLORS["text_muted"]),
+                ft.Container(height=8),
+                ft.Container(
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.LOCK_OUTLINE, size=18, color=COLORS["text_muted"]),
+                        ft.Container(content=self.pausa_pass, expand=True),
+                    ], spacing=10),
+                    bgcolor=COLORS["bg_input"], border=ft.Border.all(1, COLORS["border"]),
+                    border_radius=RADIUS["md"],
+                    padding=ft.Padding.symmetric(horizontal=15, vertical=0), height=52,
+                ),
+                self.pausa_err,
+                ft.Container(height=4),
+                ft.Container(
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.PLAY_ARROW, color="#FFFFFF", size=19),
+                        ft.Text("Volver a cobrar", size=16, weight=ft.FontWeight.W_700,
+                                color="#FFFFFF"),
+                    ], alignment=ft.MainAxisAlignment.CENTER, spacing=9),
+                    height=54, border_radius=RADIUS["md"], bgcolor=COLORS["accent_primary"],
+                    alignment=ft.Alignment.CENTER, ink=True,
+                    on_click=lambda e: self._reanudar(),
+                ),
+            ], spacing=9, tight=True),
+            width=430, padding=ft.Padding.symmetric(horizontal=30, vertical=28),
+            bgcolor=COLORS["bg_secondary"], border_radius=RADIUS["lg"],
+            border=ft.Border.all(1, COLORS["border"]),
+        )
+        self.pausa_layer = ft.Container(
+            content=card, alignment=ft.Alignment.CENTER, expand=True,
+            bgcolor=COLORS["bg_primary"], visible=False,
+        )
+        return self.pausa_layer
+
+    def _pausar(self):
+        if not self._sesion:
+            return
+        self._pausado = True
+        numero = self._sesion.get("numero_fmt", "")
+        self.pausa_info.value = f"Caja {numero} · {self.current_user.get('full_name') or self.current_user.get('username', '')}"
+        self.pausa_pass.value = ""
+        self.pausa_err.visible = False
+        self.pausa_layer.visible = True
+        self._u(self.pausa_info)
+        self._u(self.pausa_pass)
+        self._u(self.pausa_err)
+        self._u(self.pausa_layer)
+        self._focus(self.pausa_pass)
+
+    def _reanudar(self):
+        senha = self.pausa_pass.value or ""
+        if not senha:
+            self.pausa_err.value = "Ingresá tu contraseña para volver."
+            self.pausa_err.visible = True
+            self._u(self.pausa_err)
+            return
+
+        def work():
+            if not auth_service.verify_password(senha):
+                self.pausa_err.value = "Contraseña incorrecta."
+                self.pausa_err.visible = True
+                self.pausa_pass.value = ""
+                self._u(self.pausa_err)
+                self._u(self.pausa_pass)
+                return
+            self._pausado = False
+            self.pausa_pass.value = ""
+            self.pausa_err.visible = False
+            self.pausa_layer.visible = False
+            self._u(self.pausa_pass)
+            self._u(self.pausa_err)
+            self._u(self.pausa_layer)
+            self._focus(self.search_field)
+
+        self._bg(work)
+
     def did_mount(self):
+        self._install_keyboard()
         threading.Thread(target=self._load_sesion, daemon=True).start()
+
+    def will_unmount(self):
+        self._restore_keyboard()
 
     def _load_sesion(self):
         """Descobre se o cajero já tem turno aberto e ajusta a tela."""
@@ -294,9 +537,11 @@ class CajaView(ft.Container):
 
         self.caja_chip.visible = abierta
         self.cerrar_btn.visible = abierta
+        self.acciones_row.visible = abierta
         self.apertura_layer.visible = not abierta
         self._u(self.caja_chip)
         self._u(self.cerrar_btn)
+        self._u(self.acciones_row)
         self._u(self.apertura_layer)
         self._guard_window(abierta)
 
@@ -328,6 +573,20 @@ class CajaView(ft.Container):
         if self.on_logout:
             self.on_logout()
 
+    def _volver_al_menu(self):
+        """
+        Volta ao menu. O turno pode ficar aberto — o cajero só saiu da tela.
+
+        Quem impede fechar o app com a gaveta aberta é o guard da janela, que
+        `main.py` mantém instalado enquanto houver turno aberto.
+        """
+        if self._sesion:
+            self.show_snackbar(
+                f"La Caja {self._sesion.get('numero_fmt', '')} sigue abierta — "
+                "volvé para cerrarla al final del turno.")
+        if self.on_exit:
+            self.on_exit(self._sesion)
+
     def _warn_caja_abierta(self, accion: str):
         numero = (self._sesion or {}).get("numero_fmt", "")
         modal = AppModal(
@@ -352,6 +611,7 @@ class CajaView(ft.Container):
             ],
             width_pct=0.36,
         )
+        self._track(modal)
         modal.open()
 
     def _abrir_caja(self):
@@ -385,30 +645,38 @@ class CajaView(ft.Container):
             self._u(self.apertura_monto)
             self._render_sesion()
             self.show_snackbar(f"Caja {self._sesion.get('numero_fmt')} abierta.")
-            try:
-                self.search_field.focus()
-            except Exception:
-                pass
+            self._focus(self.search_field)
 
         self._bg(work)
 
     def _open_cierre(self):
-        """Modal do cierre: resumo do turno + contagem do efectivo."""
+        """
+        Cierre às cegas: o cajero digita o que contou ANTES de ver o esperado.
+
+        Mostrar o esperado primeiro transforma a contagem numa conferência de
+        gabarito — quem conta olhando o número certo tende a "achar" que fecha.
+        Só depois de registrar a contagem aparecem o esperado e a diferença.
+        """
         if not self._sesion:
             return
 
-        resumen = ft.Column([ft.Text("Calculando…", size=13, color=COLORS["text_muted"])],
-                            spacing=7, tight=True)
         fisico = ft.TextField(
             value="", hint_text="0", border=ft.InputBorder.NONE, autofocus=True,
             text_style=ft.TextStyle(size=22, weight=ft.FontWeight.W_700, color=COLORS["text_primary"]),
             content_padding=ft.Padding.symmetric(horizontal=0, vertical=8),
             keyboard_type=ft.KeyboardType.NUMBER,
+            on_submit=lambda e: _revelar(),
         )
         obs = create_text_field("Observaciones (opcional)", width=None)
         err = ft.Text("", size=12, color=COLORS["accent_error"], visible=False)
-        dif_txt = ft.Text("", size=13, weight=ft.FontWeight.W_600, visible=False)
-        esperado = {"valor": 0.0}
+        resumen = ft.Column(spacing=7, tight=True, visible=False)
+        estado = {"esperado": None, "revelado": False}
+
+        ciego_hint = ft.Text(
+            "Contá la plata de la gaveta y escribí el total. El sistema te muestra "
+            "después lo que esperaba, para que la cuenta sea tuya y no una copia.",
+            size=12, color=COLORS["text_muted"],
+        )
 
         def _line(label: str, value: str, strong: bool = False) -> ft.Control:
             return ft.Row([
@@ -419,51 +687,74 @@ class CajaView(ft.Container):
                         color=COLORS["text_primary"]),
             ])
 
-        def _on_fisico_change(e):
+        def _pintar_resumen(r: dict, contado: float):
+            esperado = float(r.get("efectivo_esperado") or 0)
+            estado["esperado"] = esperado
+            filas = [
+                _line("Abierta", format_local(r.get("fecha_apertura"), "%d/%m/%Y %H:%M")),
+                _line("Monto inicial", _money(r.get("monto_inicial"))),
+                _line(f"Cobros en efectivo ({r.get('cantidad_pagos', 0)} pagos)",
+                      _money(r.get("ingresos_efectivo"))),
+            ]
+            if float(r.get("ingresos_transferencia") or 0):
+                filas.append(_line("Transferencias (no van en la gaveta)",
+                                   _money(r.get("ingresos_transferencia"))))
+            if float(r.get("ingresos_cheque") or 0):
+                filas.append(_line("Cheques (no van en la gaveta)", _money(r.get("ingresos_cheque"))))
+            if float(r.get("estornos_efectivo_previos") or 0):
+                filas.append(_line("Anulaciones pagadas de esta caja",
+                                   f"− {_money(r.get('estornos_efectivo_previos'))}"))
+            if float(r.get("sangrias_total") or 0):
+                filas.append(_line(f"Sangrías ({r.get('sangrias_cantidad', 0)})",
+                                   f"− {_money(r.get('sangrias_total'))}"))
+            if float(r.get("reposiciones_total") or 0):
+                filas.append(_line(f"Reposiciones ({r.get('reposiciones_cantidad', 0)})",
+                                   _money(r.get("reposiciones_total"))))
+            filas.append(ft.Divider(height=1, color=COLORS["border_subtle"]))
+            filas.append(_line("Efectivo esperado", _money(esperado), strong=True))
+            filas.append(_line("Efectivo contado", _money(contado), strong=True))
+
+            dif = contado - esperado
+            if dif == 0:
+                txt, col = "Cuadra exacto.", COLORS["accent_success"]
+            elif dif > 0:
+                txt, col = f"Sobra {_money(dif)}", COLORS["accent_warning"]
+            else:
+                txt, col = f"Falta {_money(abs(dif))}", COLORS["accent_error"]
+            filas.append(ft.Text(txt, size=15, weight=ft.FontWeight.W_700, color=col))
+            if dif != 0:
+                filas.append(ft.Text(
+                    "Anotá en las observaciones qué explica la diferencia — el cierre "
+                    "queda guardado como está.", size=12, color=COLORS["text_muted"]))
+            resumen.controls = filas
+            resumen.visible = True
+            ciego_hint.visible = False
+            self._u(resumen)
+            self._u(ciego_hint)
+            modal.update()
+
+        def _revelar():
             contado = self._parse_amount(fisico.value)
             if contado is None:
-                dif_txt.visible = False
-                self._u(dif_txt)
+                err.value = "Ingresá el efectivo contado."
+                err.visible = True
+                self._u(err)
                 return
-            dif = contado - esperado["valor"]
-            if dif == 0:
-                dif_txt.value = "Cuadra exacto."
-                dif_txt.color = COLORS["accent_success"]
-            elif dif > 0:
-                dif_txt.value = f"Sobra {_money(dif)}"
-                dif_txt.color = COLORS["accent_warning"]
-            else:
-                dif_txt.value = f"Falta {_money(abs(dif))}"
-                dif_txt.color = COLORS["accent_error"]
-            dif_txt.visible = True
-            self._u(dif_txt)
+            err.visible = False
+            self._u(err)
 
-        fisico.on_change = _on_fisico_change
+            def work():
+                try:
+                    r = caja_service.preview()
+                except APIError as exc:
+                    err.value = friendly_error(exc)
+                    err.visible = True
+                    self._u(err)
+                    return
+                estado["revelado"] = True
+                _pintar_resumen(r, contado)
 
-        modal = AppModal(
-            page=self.page,
-            title=f"Cerrar Caja {self._sesion.get('numero_fmt', '')}",
-            content=ft.Column([
-                resumen,
-                ft.Divider(height=1, color=COLORS["border_subtle"]),
-                ft.Text("EFECTIVO CONTADO", size=11, weight=ft.FontWeight.W_700, color=COLORS["text_muted"]),
-                ft.Container(
-                    content=ft.Row([
-                        ft.Text("Gs.", size=16, weight=ft.FontWeight.W_600, color=COLORS["text_muted"]),
-                        ft.Container(content=fisico, expand=True),
-                    ], spacing=10),
-                    bgcolor=COLORS["bg_input"], border=ft.Border.all(1, COLORS["border"]),
-                    border_radius=RADIUS["md"],
-                    padding=ft.Padding.symmetric(horizontal=15, vertical=0), height=50,
-                ),
-                dif_txt, obs, err,
-            ], spacing=11, tight=True),
-            actions=[
-                ModalAction(t("common.cancel"), on_click=lambda e: modal.close()),
-                ModalAction("Cerrar caja", primary=True, on_click=lambda e: _cerrar()),
-            ],
-            width_pct=0.42,
-        )
+            self._bg(work)
 
         def _cerrar():
             contado = self._parse_amount(fisico.value)
@@ -471,6 +762,9 @@ class CajaView(ft.Container):
                 err.value = "Ingresá el efectivo contado."
                 err.visible = True
                 self._u(err)
+                return
+            if not estado["revelado"]:
+                _revelar()
                 return
 
             def work():
@@ -490,44 +784,41 @@ class CajaView(ft.Container):
                 self._render_sesion()
                 self._print_cierre(cerrada)
                 dif = float(cerrada.get("diferencia") or 0)
-                estado = ("cuadró exacto" if dif == 0
-                          else f"sobra {_money(dif)}" if dif > 0
-                          else f"falta {_money(abs(dif))}")
+                est = ("cuadró exacto" if dif == 0
+                       else f"sobra {_money(dif)}" if dif > 0
+                       else f"falta {_money(abs(dif))}")
                 self.show_snackbar(
-                    f"Caja {cerrada.get('numero_fmt')} cerrada — {estado}.", error=dif != 0)
+                    f"Caja {cerrada.get('numero_fmt')} cerrada — {est}.", error=dif != 0)
 
             self._bg(work)
 
+        modal = AppModal(
+            page=self.page,
+            title=f"Cerrar Caja {self._sesion.get('numero_fmt', '')}",
+            content=ft.Column([
+                ft.Text("EFECTIVO CONTADO", size=11, weight=ft.FontWeight.W_700, color=COLORS["text_muted"]),
+                ft.Container(
+                    content=ft.Row([
+                        ft.Text("Gs.", size=16, weight=ft.FontWeight.W_600, color=COLORS["text_muted"]),
+                        ft.Container(content=fisico, expand=True),
+                    ], spacing=10),
+                    bgcolor=COLORS["bg_input"], border=ft.Border.all(1, COLORS["border"]),
+                    border_radius=RADIUS["md"],
+                    padding=ft.Padding.symmetric(horizontal=15, vertical=0), height=50,
+                ),
+                ciego_hint,
+                resumen,
+                obs, err,
+            ], spacing=11, tight=True, scroll=ft.ScrollMode.AUTO),
+            actions=[
+                ModalAction(t("common.cancel"), on_click=lambda e: modal.close()),
+                ModalAction("Ver esperado", on_click=lambda e: _revelar()),
+                ModalAction("Cerrar caja", primary=True, on_click=lambda e: _cerrar()),
+            ],
+            width_pct=0.42,
+        )
+        self._track(modal)
         modal.open()
-
-        def load():
-            try:
-                r = caja_service.preview()
-            except APIError as exc:
-                resumen.controls = [ft.Text(friendly_error(exc), size=13, color=COLORS["accent_error"])]
-                self._u(resumen)
-                return
-            esperado["valor"] = float(r.get("efectivo_esperado") or 0)
-            filas = [
-                _line("Abierta", format_local(r.get("fecha_apertura"), "%d/%m/%Y %H:%M")),
-                _line("Monto inicial", _money(r.get("monto_inicial"))),
-                _line(f"Cobros en efectivo ({r.get('cantidad_pagos', 0)} pagos)",
-                      _money(r.get("ingresos_efectivo"))),
-            ]
-            if float(r.get("ingresos_transferencia") or 0):
-                filas.append(_line("Transferencias (no van en la gaveta)",
-                                   _money(r.get("ingresos_transferencia"))))
-            if float(r.get("ingresos_cheque") or 0):
-                filas.append(_line("Cheques (no van en la gaveta)", _money(r.get("ingresos_cheque"))))
-            if float(r.get("estornos_efectivo_previos") or 0):
-                filas.append(_line("Anulaciones pagadas de esta caja",
-                                   f"− {_money(r.get('estornos_efectivo_previos'))}"))
-            filas.append(ft.Divider(height=1, color=COLORS["border_subtle"]))
-            filas.append(_line("Efectivo esperado", _money(esperado["valor"]), strong=True))
-            resumen.controls = filas
-            self._u(resumen)
-
-        self._bg(load)
 
     def _start_clock(self):
         def tick():
@@ -541,13 +832,80 @@ class CajaView(ft.Container):
             self._clock_timer.start()
         tick()
 
+    # ------------------------------------------------------------- teclado
+    def _install_keyboard(self):
+        """
+        Atalhos do balcão. Só teclas de função e Esc: o resto do ritmo é o
+        próprio Enter dos campos (buscar → seleccionar → valor → cobrar).
+
+        Não disparam com um dialog na frente — senão F5 abriria uma tela em cima
+        da outra.
+        """
+        page = self.page
+        if not page:
+            return
+        try:
+            self._prev_keyboard_handler = getattr(page, "on_keyboard_event", None)
+            page.on_keyboard_event = self._on_key
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Caja] keyboard_hook_failed err={exc}")
+
+    def _restore_keyboard(self):
+        page = self.page
+        if not page:
+            return
+        try:
+            page.on_keyboard_event = self._prev_keyboard_handler
+        except Exception:
+            pass
+
+    def _on_key(self, e):
+        key = getattr(e, "key", "")
+        if not self._sin_dialogs() or self._pausado:
+            return
+        if not self._sesion:
+            return
+        acciones = {
+            "F1": self._nuevo_cliente_desde_busqueda,
+            "F2": self._select_pendientes,
+            "F3": self._clear_selection,
+            "F4": self._open_acuerdo,
+            "F5": self._open_atenciones,
+            "F6": self._open_resumen,
+            "F7": self._parkear,
+            "F8": self._retomar,
+            "F9": lambda: self._open_movimiento(SANGRIA),
+            "F10": self._open_cierre,
+            "F11": self._pausar,
+            "Escape": self._nuevo_atendimiento,
+        }
+        fn = acciones.get(key)
+        if not fn:
+            return
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Caja] shortcut_failed key={key} err={exc}")
+
+    def _nuevo_atendimiento(self):
+        """Esc: larga o atendimento atual e volta o foco para a busca."""
+        self._reset()
+        self._focus(self.search_field)
+
+    # ------------------------------------------------------------- esquerda
     def _build_left(self) -> ft.Control:
         self.search_field = create_text_field(
             "", hint_text="Buscar cliente o Nº de factura…", width=None, autofocus=True,
         )
         self.search_field.on_change = self._on_search_change
-        self.search_field.on_submit = lambda e: self._bg(self._run_search)
-        self.search_results = ft.Column(spacing=6, height=0, scroll=ft.ScrollMode.AUTO)
+        self.search_field.on_submit = lambda e: self._on_search_submit()
+        self.search_results = ft.Column(spacing=self.BUSCA_ESPACIO, height=0,
+                                        scroll=ft.ScrollMode.AUTO)
+        self.search_footer = ft.Row([], spacing=9, visible=False, wrap=True)
+
+        # Atendimentos em espera: o cliente foi buscar dinheiro no carro, o
+        # próximo já está no balcão.
+        self.espera_row = ft.Row([], spacing=7, wrap=True, visible=False)
 
         # cartão cliente + saldo (ocultos até selecionar)
         self.client_name = ft.Text("", size=21, weight=ft.FontWeight.W_700, color=COLORS["text_primary"])
@@ -555,6 +913,9 @@ class CajaView(ft.Container):
         self.client_chip = ft.Container(visible=False)
         self.saldo_big = ft.Text("Gs. 0", size=26, weight=ft.FontWeight.W_800, color=COLORS["text_primary"])
         self.saldo_cnt = ft.Text("", size=13, color=COLORS["text_secondary"])
+        self.acuerdo_box = ft.Container(visible=False)
+        self.cargos_list = ft.Column(spacing=6)
+        self.cargos_block = ft.Column(spacing=6, visible=False)
         self.months_grid = ft.Column(spacing=8)
         self.months_sub = ft.Text("", size=12, color=COLORS["text_secondary"])
         self.mas_meses_btn = ft.TextButton(
@@ -570,6 +931,19 @@ class CajaView(ft.Container):
         self.consumo_labels = ft.Row(spacing=6)
         self.consumo_foot = ft.Text("", size=12, color=COLORS["text_secondary"])
 
+        self.cargos_block.controls = [
+            ft.Row([
+                ft.Column([
+                    ft.Text("OTROS CARGOS", size=12, weight=ft.FontWeight.W_700,
+                            color=COLORS["text_secondary"]),
+                    ft.Text("Cargos de tesorería (reconexión, materiales, cuota de "
+                            "conexión…). No es consumo de agua.",
+                            size=11, color=COLORS["text_muted"]),
+                ], spacing=1, expand=True),
+            ]),
+            self.cargos_list,
+        ]
+
         self.client_block = ft.Column(
             [
                 ft.Row(
@@ -584,22 +958,35 @@ class CajaView(ft.Container):
                     [
                         ft.Text("SALDO PENDIENTE", size=11, weight=ft.FontWeight.W_700, color=COLORS["text_muted"]),
                         self.saldo_big, self.saldo_cnt,
+                        ft.Container(expand=True),
+                        ft.TextButton(
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.CALENDAR_MONTH, size=15,
+                                        color=COLORS["accent_secondary"]),
+                                ft.Text("Plan de pagos (F4)", size=12,
+                                        color=COLORS["accent_secondary"]),
+                            ], spacing=6, tight=True),
+                            tooltip="Parcelar la deuda en cuotas",
+                            on_click=lambda e: self._open_acuerdo(),
+                        ),
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.END, spacing=13,
                 ),
-                ft.Container(height=4),
+                self.acuerdo_box,
+                self.cargos_block,
+                ft.Container(height=2),
                 ft.Row([
                     ft.Column([
-                        ft.Text("MESES", size=12, weight=ft.FontWeight.W_700,
+                        ft.Text("MESES DE AGUA", size=12, weight=ft.FontWeight.W_700,
                                 color=COLORS["text_secondary"]),
                         self.months_sub,
                     ], spacing=1, expand=True),
                     ft.TextButton(
-                        content=ft.Text("Todo lo que debe", size=12, color=COLORS["accent_secondary"]),
+                        content=ft.Text("Todo lo que debe (F2)", size=12, color=COLORS["accent_secondary"]),
                         on_click=lambda e: self._select_pendientes(),
                     ),
                     ft.TextButton(
-                        content=ft.Text("Limpiar", size=12, color=COLORS["text_muted"]),
+                        content=ft.Text("Limpiar (F3)", size=12, color=COLORS["text_muted"]),
                         on_click=lambda e: self._clear_selection(),
                     ),
                 ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=4),
@@ -635,11 +1022,13 @@ class CajaView(ft.Container):
         return ft.Container(
             content=ft.Column(
                 [
+                    self.espera_row,
                     ft.Row([
                         ft.Icon(ft.Icons.SEARCH, color=COLORS["text_muted"], size=21),
                         ft.Container(content=self.search_field, expand=True),
                     ], spacing=10),
                     self.search_results,
+                    self.search_footer,
                     self.client_block,
                 ],
                 spacing=SPACING["md"], scroll=ft.ScrollMode.AUTO,
@@ -648,25 +1037,60 @@ class CajaView(ft.Container):
             expand=True,
         )
 
+    # -------------------------------------------------------------- direita
     def _build_right(self) -> ft.Control:
         # Lista item a item do que entra no cobro — o cajero tem que poder ler
         # em voz alta pro cliente antes de apertar o botão.
         self.detail_list = ft.Column(spacing=0, scroll=ft.ScrollMode.AUTO, height=0)
         self.brk_deuda = ft.Text("Gs. 0", size=13, weight=ft.FontWeight.W_600, color=COLORS["text_primary"])
+        self.brk_cargos = ft.Text("Gs. 0", size=13, weight=ft.FontWeight.W_600, color=COLORS["text_primary"])
         self.brk_adv = ft.Text("Gs. 0", size=13, weight=ft.FontWeight.W_600, color=COLORS["text_primary"])
         self.brk_adv_n = ft.Text("", size=12, color=COLORS["text_muted"])
         self.brk_adv_lbl = ft.Text("Adelanto", size=13, color=COLORS["text_secondary"])
+        self.brk_cargos_row = ft.Row([
+            ft.Text("Otros cargos", size=13, color=COLORS["text_secondary"]),
+            ft.Container(expand=True), self.brk_cargos,
+        ], visible=False)
+        self.brk_adv_row = ft.Row([
+            self.brk_adv_lbl, self.brk_adv_n, ft.Container(expand=True), self.brk_adv,
+        ], visible=False)
         self.brk_box = ft.Column([
             ft.Row([ft.Text("Deuda", size=13, color=COLORS["text_secondary"]),
                     ft.Container(expand=True), self.brk_deuda]),
-            ft.Row([self.brk_adv_lbl, self.brk_adv_n,
-                    ft.Container(expand=True), self.brk_adv]),
+            self.brk_cargos_row,
+            self.brk_adv_row,
         ], spacing=5, visible=False)
         self.total_text = ft.Text("Gs. 0", size=30, weight=ft.FontWeight.W_800, color=COLORS["text_primary"])
 
+        # Fase 2.2: "valor a cobrar" ≠ "recibí". Um é o que se lança na conta do
+        # cliente (pode ser menos que o total: pagamento parcial); o outro é o
+        # papel-moeda que entrou na gaveta, que só serve para o troco.
+        self.cobrar_field = ft.TextField(
+            value="", hint_text="0", border=ft.InputBorder.NONE,
+            text_style=ft.TextStyle(size=22, weight=ft.FontWeight.W_700, color=COLORS["text_primary"]),
+            content_padding=ft.Padding.symmetric(horizontal=0, vertical=8),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_change=self._on_cobrar_change,
+            on_submit=lambda e: self._focus_recibi(),
+        )
+        cobrar_box = ft.Container(
+            content=ft.Row([
+                ft.Text("Gs.", size=17, weight=ft.FontWeight.W_600, color=COLORS["text_muted"]),
+                ft.Container(content=self.cobrar_field, expand=True),
+            ], spacing=10),
+            bgcolor=COLORS["bg_input"], border=ft.Border.all(1, COLORS["accent_primary"]),
+            border_radius=RADIUS["md"], padding=ft.Padding.symmetric(horizontal=15, vertical=0),
+            height=52,
+        )
+        self.parcial_txt = ft.Text("", size=12, color=COLORS["accent_warning"], visible=False)
+        self.cobrar_quick = ft.Row([
+            self._chip_mini("Todo", lambda: self._set_cobrar(None)),
+            self._chip_mini("Mitad", lambda: self._set_cobrar(-0.5)),
+        ], spacing=7)
+
         self.recibi_field = ft.TextField(
             value="", hint_text="0", border=ft.InputBorder.NONE,
-            text_style=ft.TextStyle(size=24, weight=ft.FontWeight.W_700, color=COLORS["text_primary"]),
+            text_style=ft.TextStyle(size=22, weight=ft.FontWeight.W_700, color=COLORS["text_primary"]),
             content_padding=ft.Padding.symmetric(horizontal=0, vertical=8),
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=self._on_recibi_change,
@@ -674,11 +1098,11 @@ class CajaView(ft.Container):
         )
         recibi_box = ft.Container(
             content=ft.Row([
-                ft.Text("Gs.", size=18, weight=ft.FontWeight.W_600, color=COLORS["text_muted"]),
+                ft.Text("Gs.", size=17, weight=ft.FontWeight.W_600, color=COLORS["text_muted"]),
                 ft.Container(content=self.recibi_field, expand=True),
             ], spacing=10),
             bgcolor=COLORS["bg_input"], border=ft.Border.all(1, COLORS["border"]),
-            border_radius=RADIUS["md"], padding=ft.Padding.symmetric(horizontal=15, vertical=0), height=54,
+            border_radius=RADIUS["md"], padding=ft.Padding.symmetric(horizontal=15, vertical=0), height=52,
         )
 
         quick = ft.Row(
@@ -688,11 +1112,11 @@ class CajaView(ft.Container):
         )
 
         self.vuelto_lbl = ft.Text("VUELTO", size=12, weight=ft.FontWeight.W_700, color="#5FD6AB")
-        self.vuelto_val = ft.Text("Gs. 0", size=33, weight=ft.FontWeight.W_800, color=COLORS["accent_success"])
+        self.vuelto_val = ft.Text("Gs. 0", size=30, weight=ft.FontWeight.W_800, color=COLORS["accent_success"])
         self.vuelto_box = ft.Container(
             content=ft.Row([self.vuelto_lbl, ft.Container(expand=True), self.vuelto_val],
                            vertical_alignment=ft.CrossAxisAlignment.END),
-            padding=ft.Padding.symmetric(horizontal=17, vertical=15), border_radius=RADIUS["lg"],
+            padding=ft.Padding.symmetric(horizontal=17, vertical=13), border_radius=RADIUS["lg"],
             bgcolor=ft.Colors.with_opacity(0.12, COLORS["accent_success"]),
             border=ft.Border.all(1, ft.Colors.with_opacity(0.28, COLORS["accent_success"])),
         )
@@ -721,6 +1145,14 @@ class CajaView(ft.Container):
             height=56, border_radius=RADIUS["md"], bgcolor=COLORS["accent_primary"],
             alignment=ft.Alignment.CENTER, ink=True, on_click=lambda e: self._confirm(),
         )
+        self.espera_btn = ft.TextButton(
+            content=ft.Row([
+                ft.Icon(ft.Icons.PAUSE_PRESENTATION, size=15, color=COLORS["text_muted"]),
+                ft.Text("Dejar en espera (F7)", size=12, color=COLORS["text_muted"]),
+            ], spacing=6, tight=True),
+            tooltip="Guarda este atendimiento y libera el mostrador para el siguiente",
+            on_click=lambda e: self._parkear(),
+        )
 
         return ft.Container(
             content=ft.Column(
@@ -729,13 +1161,17 @@ class CajaView(ft.Container):
                     self.detail_list,
                     self.brk_box,
                     ft.Container(
-                        content=ft.Row([ft.Text("TOTAL", size=13, weight=ft.FontWeight.W_700, color=COLORS["text_secondary"]),
+                        content=ft.Row([ft.Text("SELECCIONADO", size=13, weight=ft.FontWeight.W_700, color=COLORS["text_secondary"]),
                                         ft.Container(expand=True), self.total_text],
                                        vertical_alignment=ft.CrossAxisAlignment.END),
-                        padding=ft.Padding.symmetric(horizontal=0, vertical=15),
+                        padding=ft.Padding.symmetric(horizontal=0, vertical=13),
                         border=ft.Border.only(top=ft.BorderSide(1, COLORS["border"]),
                                               bottom=ft.BorderSide(1, COLORS["border"])),
                     ),
+                    ft.Text("VALOR A COBRAR", size=11, weight=ft.FontWeight.W_700, color=COLORS["text_muted"]),
+                    cobrar_box,
+                    self.cobrar_quick,
+                    self.parcial_txt,
                     ft.Text("RECIBÍ", size=11, weight=ft.FontWeight.W_700, color=COLORS["text_muted"]),
                     recibi_box,
                     quick,
@@ -745,14 +1181,25 @@ class CajaView(ft.Container):
                     ft.Text("COMPROBANTE", size=11, weight=ft.FontWeight.W_700, color=COLORS["text_muted"]),
                     self.comprobante_row,
                     self.comprobante_help,
-                    ft.Container(expand=True),
+                    ft.Container(height=6),
                     self.confirm_btn,
+                    ft.Row([self.espera_btn], alignment=ft.MainAxisAlignment.CENTER),
                 ],
-                spacing=13,
+                spacing=11, scroll=ft.ScrollMode.AUTO,
             ),
             width=384, bgcolor=COLORS["bg_secondary"],
             border=ft.Border.only(left=ft.BorderSide(1, COLORS["border"])),
             padding=ft.Padding.symmetric(horizontal=22, vertical=20),
+        )
+
+    def _chip_mini(self, label: str, on_click) -> ft.Control:
+        return ft.Container(
+            content=ft.Text(label, size=12, weight=ft.FontWeight.W_600,
+                            color=COLORS["text_secondary"]),
+            padding=ft.Padding.symmetric(horizontal=0, vertical=7), expand=True,
+            alignment=ft.Alignment.CENTER, bgcolor=COLORS["bg_input"],
+            border=ft.Border.all(1, COLORS["border"]), border_radius=RADIUS["sm"], ink=True,
+            on_click=lambda e: on_click(),
         )
 
     def _quick_chip(self, label: str, value) -> ft.Control:
@@ -785,6 +1232,11 @@ class CajaView(ft.Container):
             self._metodo_chip("Cheque", "CHEQUE"),
         ]
         self._u(self.metodo_row)
+        # Transferencia/cheque não têm troco: o "recibí" acompanha o que se cobra.
+        if value != "EFECTIVO":
+            self.recibi_field.value = self.cobrar_field.value
+            self._u(self.recibi_field)
+        self._recompute()
 
     def _comprobante_chips(self) -> list:
         chips = []
@@ -824,21 +1276,40 @@ class CajaView(ft.Container):
                 pass
         if len(q) < 2:
             self._results = []
+            self._search_total = 0
             self._render_results()
             return
         self._search_timer = threading.Timer(0.35, lambda: self._bg(self._run_search))
         self._search_timer.daemon = True
         self._search_timer.start()
 
+    def _on_search_submit(self):
+        """
+        Enter na busca: se já há resultado, entra no primeiro — o cajero digita o
+        nome e aperta Enter, sem tocar no mouse.
+        """
+        if self._results:
+            cid = self._results[0].get("id")
+            self._bg(lambda: self._select_client(cid))
+            return
+        self._bg(self._run_search)
+
     def _run_search(self):
         q = (self.search_field.value or "").strip()
         if len(q) < 2:
             return
+        self._search_seq += 1
+        seq = self._search_seq
         try:
-            self._results = client_service.search(query=q, limit=20)
+            rows, total = client_service.search_paged(query=q, limit=self.BUSCA_LIMIT)
         except APIError as err:
             self.show_snackbar(friendly_error(err), error=True)
             return
+        # Resposta atrasada de uma busca anterior não sobrescreve a atual.
+        if seq != self._search_seq:
+            return
+        self._results = rows
+        self._search_total = total or len(rows)
         self._render_results()
 
     def _render_results(self):
@@ -860,11 +1331,68 @@ class CajaView(ft.Container):
                 border_radius=RADIUS["sm"], ink=True,
                 on_click=lambda e, cid=c.get("id"): self._bg(lambda: self._select_client(cid)),
             ))
-        if not rows:
-            rows = [ft.Text("Ningún cliente encontrado.", size=12, color=COLORS["text_muted"])]
+
+        q = (self.search_field.value or "").strip()
+        pie = []
+        if not self._results:
+            if len(q) >= 2:
+                rows = [ft.Text("Ningún cliente encontrado.", size=12, color=COLORS["text_muted"])]
+                # O botão nasce do resultado vazio, já com o que foi digitado:
+                # quem chega para se ligar à rede não está no cadastro ainda.
+                pie.append(ft.Container(
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.PERSON_ADD_ALT, size=16, color="#FFFFFF"),
+                        ft.Text(f"Registrar «{q}» (F1)", size=13,
+                                weight=ft.FontWeight.W_700, color="#FFFFFF"),
+                    ], spacing=8, tight=True),
+                    padding=ft.Padding.symmetric(horizontal=14, vertical=9),
+                    bgcolor=COLORS["accent_primary"], border_radius=RADIUS["sm"], ink=True,
+                    on_click=lambda e: self._nuevo_cliente_desde_busqueda(),
+                ))
+            else:
+                rows = []
+        elif self._search_total > len(self._results):
+            # Nunca esconder resultado sem dizer: o cajero precisa saber que há
+            # mais gente com aquele nome antes de cobrar do homônimo errado.
+            pie.append(ft.Text(
+                f"Mostrando {len(self._results)} de {self._search_total} — afiná la "
+                "búsqueda (CI o nº de medidor son únicos).",
+                size=12, color=COLORS["accent_warning"]))
+
         self.search_results.controls = rows
-        self.search_results.height = min(230, 44 * max(1, len(self._results)))
+        # Altura pela linha real (dois textos + padding) e não por um chute: era
+        # o que cortava a última linha no meio.
+        n = len(rows)
+        alto = (n * self.BUSCA_ALTURA_FILA + max(0, n - 1) * self.BUSCA_ESPACIO) if n else 0
+        self.search_results.height = min(self.BUSCA_ALTURA_MAX, alto)
+        self.search_footer.controls = pie
+        self.search_footer.visible = bool(pie)
         self._u(self.search_results)
+        self._u(self.search_footer)
+
+    def _nuevo_cliente_desde_busqueda(self):
+        """
+        Cadastro completo, igual ao administrativo — e volta ao atendimento com o
+        cliente já selecionado, sem recomeçar a busca.
+        """
+        q = (self.search_field.value or "").strip()
+        prefill = {}
+        if q:
+            # Só dígitos (e traço) parece documento; o resto é nome.
+            solo_doc = q.replace("-", "").replace(".", "").isdigit()
+            prefill = {"ci_ruc": q} if solo_doc else {"nombre_completo": q}
+
+        def _after(saved: dict):
+            self.search_field.value = ""
+            self._results = []
+            self._search_total = 0
+            self._render_results()
+            self._u(self.search_field)
+            cid = (saved or {}).get("id")
+            if cid:
+                self._bg(lambda: self._select_client(cid))
+
+        open_client_form(self.page, self.show_snackbar, prefill=prefill, on_saved=_after)
 
     def _status_chip(self, status: str) -> ft.Container:
         colors = {"ATIVO": COLORS["status_active"], "CORTADO": COLORS["status_cut"],
@@ -878,19 +1406,27 @@ class CajaView(ft.Container):
         )
 
     # ---------------------------------------------------------------- seleção
-    def _select_client(self, client_id: str):
-        self._meses_futuro = self.MESES_FUTURO_INICIAL
+    def _select_client(self, client_id: str, meses_futuro: int | None = None,
+                       preservar: dict | None = None):
+        self._meses_futuro = meses_futuro or self.MESES_FUTURO_INICIAL
         try:
             ctx = client_service.get_payment_context(client_id, self._meses_futuro)
         except APIError as err:
             self.show_snackbar(friendly_error(err), error=True)
             return
+        self._apply_context(ctx, preservar)
+
+    def _apply_context(self, ctx: dict, preservar: dict | None = None):
         self._ctx = ctx
         self._tarifa = float(ctx.get("tarifa_base", 0) or 0)
         client = ctx.get("client") or {}
 
-        # monta as células da grade (pendente pré-selecionada)
-        self._build_cells(ctx)
+        # índice de faturas por id: é o que permite simular o reparto de um
+        # pagamento parcial e montar a factura legal com os valores reais.
+        self._facturas = {f["id"]: f for f in (ctx.get("facturas") or []) if f.get("id")}
+
+        self._build_cells(ctx, (preservar or {}).get("meses"))
+        self._build_cargos(ctx, (preservar or {}).get("cargos"))
 
         self.client_name.value = client.get("nombre_completo", "-")
         self.client_sub.value = (f"CI {client.get('ci_ruc', '-')} · Medidor {client.get('numero_medidor', '-')} "
@@ -906,16 +1442,23 @@ class CajaView(ft.Container):
         self.saldo_big.value = _money(ctx.get("saldo_pendiente", 0))
         self.saldo_cnt.value = f"{ctx.get('facturas_pendientes', 0)} facturas"
 
+        self._render_acuerdo(ctx.get("acuerdo"))
+
         self._results = []
+        self._search_total = 0
         self.search_results.controls = []
         self.search_results.height = 0
+        self.search_footer.visible = False
         self.client_block.visible = True
         self._render_months()
+        self._render_cargos()
+        client_id = client.get("id")
         self._load_recent(client_id)
         self._load_consumo(client_id)
-        # pré-preenche o recibí com o total selecionado
+        # pré-preenche o valor a cobrar com o total selecionado
         self._recompute(prefill=True)
         self._u(self.search_results)
+        self._u(self.search_footer)
         self._u(self.client_block)
 
     def _build_cells(self, ctx: dict, seleccionados: set | None = None):
@@ -930,9 +1473,98 @@ class CajaView(ft.Container):
             self._cells.append({
                 "ano": m["ano"], "mes": m["mes"], "estado": m["estado"],
                 "saldo": float(m.get("saldo", 0) or 0),
+                "cuota": float(m.get("cuota", 0) or 0),
                 "invoice_ids": m.get("invoice_ids", []),
                 "sel": sel and m["estado"] != "pagada",
             })
+
+    def _build_cargos(self, ctx: dict, seleccionados: set | None = None):
+        """
+        Otros cargos: faturas AVULSA da tesouraria. Ficam fora da grade de meses
+        (não são consumo de água) mas entram no mesmo total, no mesmo recibo e na
+        mesma factura legal. Vêm marcados: é dívida como qualquer outra.
+        """
+        self._cargos = []
+        for f in ctx.get("otros_cargos") or []:
+            fid = f.get("id")
+            sel = (fid in seleccionados) if seleccionados is not None else True
+            self._cargos.append({"f": f, "sel": bool(sel)})
+
+    def _cargo_label(self, f: dict) -> str:
+        items = f.get("items") or []
+        if items:
+            desc = str(items[0].get("descripcion") or "Cargo")
+            if len(items) > 1:
+                desc += f" (+{len(items) - 1})"
+            return desc
+        nro = f.get("numero_factura")
+        return f"Factura {nro}" if nro else "Cargo de tesorería"
+
+    def _render_cargos(self):
+        filas = []
+        for i, c in enumerate(self._cargos):
+            f = c["f"]
+            per = f"{_MES[int(f.get('mes_referencia', 1)) - 1]}/{f.get('ano_referencia', '')}"
+            parcial = str(f.get("status")) == "PARCIAL"
+            filas.append(ft.Container(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.CHECK_BOX if c["sel"] else ft.Icons.CHECK_BOX_OUTLINE_BLANK,
+                            size=18,
+                            color=COLORS["accent_secondary"] if c["sel"] else COLORS["text_muted"]),
+                    ft.Column([
+                        ft.Text(self._cargo_label(f), size=13, weight=ft.FontWeight.W_600,
+                                color=COLORS["text_primary"],
+                                overflow=ft.TextOverflow.ELLIPSIS),
+                        ft.Text(per + (" · pago parcial" if parcial else "")
+                                + (f" · Fact. {f.get('numero_factura')}"
+                                   if f.get("numero_factura") else ""),
+                                size=11, color=COLORS["text_muted"]),
+                    ], spacing=1, expand=True),
+                    ft.Text(_money(f.get("saldo_devedor")), size=13,
+                            weight=ft.FontWeight.W_700, color=COLORS["text_primary"]),
+                ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                padding=ft.Padding.symmetric(horizontal=10, vertical=8),
+                bgcolor=COLORS["bg_input"], border_radius=RADIUS["sm"],
+                border=ft.Border.all(
+                    1, COLORS["accent_secondary"] if c["sel"] else COLORS["accent_warning"]),
+                ink=True, on_click=lambda e, idx=i: self._toggle_cargo(idx),
+            ))
+        self.cargos_list.controls = filas
+        self.cargos_block.visible = bool(filas)
+        self._u(self.cargos_list)
+        self._u(self.cargos_block)
+
+    def _toggle_cargo(self, idx: int):
+        self._cargos[idx]["sel"] = not self._cargos[idx]["sel"]
+        self._render_cargos()
+        self._recompute(prefill=True)
+
+    def _render_acuerdo(self, acuerdo: dict | None):
+        """Faixa do acordo ativo: quantas parcelas pagas e quanto falta."""
+        if not acuerdo:
+            self.acuerdo_box.visible = False
+            self._u(self.acuerdo_box)
+            return
+        parcelas = acuerdo.get("parcelas") or []
+        pagas = len([p for p in parcelas if p.get("status") == "PAGADA"])
+        proxima = next((p for p in parcelas if p.get("status") != "PAGADA"), None)
+        prox_txt = (f" · próxima {_MES[int(proxima['mes']) - 1]}/{proxima['ano']} "
+                    f"({_money(proxima['valor'])})" if proxima else "")
+        self.acuerdo_box.content = ft.Row([
+            ft.Icon(ft.Icons.CALENDAR_MONTH, size=17, color=COLORS["accent_secondary"]),
+            ft.Text(f"Acuerdo Nº {acuerdo.get('numero_fmt')} — {pagas}/{len(parcelas)} "
+                    f"cuotas pagas{prox_txt}", size=12,
+                    color=COLORS["text_secondary"], expand=True),
+            ft.Text(f"falta {_money(acuerdo.get('saldo_pendiente'))}", size=12,
+                    weight=ft.FontWeight.W_700, color=COLORS["text_primary"]),
+        ], spacing=9)
+        self.acuerdo_box.padding = ft.Padding.symmetric(horizontal=11, vertical=8)
+        self.acuerdo_box.bgcolor = ft.Colors.with_opacity(0.10, COLORS["accent_secondary"])
+        self.acuerdo_box.border = ft.Border.all(
+            1, ft.Colors.with_opacity(0.3, COLORS["accent_secondary"]))
+        self.acuerdo_box.border_radius = RADIUS["sm"]
+        self.acuerdo_box.visible = True
+        self._u(self.acuerdo_box)
 
     def _mas_meses(self):
         """Estica a grade um ano para frente — para adiantar até o ano que vem."""
@@ -947,6 +1579,7 @@ class CajaView(ft.Container):
             return
 
         marcados = {(c["ano"], c["mes"]) for c in self._cells if c["sel"]}
+        cargos = {c["f"]["id"] for c in self._cargos if c["sel"]}
 
         def work():
             try:
@@ -956,8 +1589,11 @@ class CajaView(ft.Container):
                 return
             self._meses_futuro = nuevo
             self._ctx = ctx
+            self._facturas = {f["id"]: f for f in (ctx.get("facturas") or []) if f.get("id")}
             self._build_cells(ctx, marcados)
+            self._build_cargos(ctx, cargos)
             self._render_months()
+            self._render_cargos()
             self._recompute()
 
         self._bg(work)
@@ -1025,24 +1661,33 @@ class CajaView(ft.Container):
             tooltip = f"{periodo} · mes por venir, se cobra adelantado a {_money(self._tarifa)}"
         else:
             tooltip = f"{periodo} · debe {_money(c['saldo'])}"
+            if c.get("cuota"):
+                tooltip += f"  (incluye cuota del acuerdo: {_money(c['cuota'])})"
         if not pagada:
             tooltip += "  —  tocá para " + ("sacarlo del cobro" if c["sel"] else "agregarlo al cobro")
 
+        etiqueta = ft.Row([
+            ft.Text(_MES[c["mes"] - 1].upper(), size=13, weight=ft.FontWeight.W_800,
+                    color=COLORS["text_muted"] if pagada else COLORS["text_primary"]),
+            ft.Container(expand=True),
+            ft.Icon(icon, size=15, color=icon_col),
+        ], spacing=4)
+
+        cuerpo = [
+            etiqueta,
+            ft.Text(valor, size=13, weight=ft.FontWeight.W_700,
+                    # sem seleção, adelanto e mês pago ficam apagados: só o
+                    # que entra no cobro (e o que ele deve) puxa o olho.
+                    color=COLORS["text_primary"] if kind == "deuda" else COLORS["text_muted"]),
+            ft.Text(estado_txt, size=10, weight=ft.FontWeight.W_600, color=estado_col),
+        ]
+        if c.get("cuota") and not pagada:
+            cuerpo.append(ft.Text("incluye cuota", size=9,
+                                  color=COLORS["accent_secondary"]))
+
         return ft.Container(
             data=idx,
-            content=ft.Column([
-                ft.Row([
-                    ft.Text(_MES[c["mes"] - 1].upper(), size=13, weight=ft.FontWeight.W_800,
-                            color=COLORS["text_muted"] if pagada else COLORS["text_primary"]),
-                    ft.Container(expand=True),
-                    ft.Icon(icon, size=15, color=icon_col),
-                ], spacing=4),
-                ft.Text(valor, size=13, weight=ft.FontWeight.W_700,
-                        # sem seleção, adelanto e mês pago ficam apagados: só o
-                        # que entra no cobro (e o que ele deve) puxa o olho.
-                        color=COLORS["text_primary"] if kind == "deuda" else COLORS["text_muted"]),
-                ft.Text(estado_txt, size=10, weight=ft.FontWeight.W_600, color=estado_col),
-            ], spacing=2),
+            content=ft.Column(cuerpo, spacing=2),
             width=112, padding=ft.Padding.only(left=10, top=8, right=10, bottom=8),
             bgcolor=bg, border=ft.Border.all(border_w, border_col), border_radius=RADIUS["sm"],
             opacity=0.5 if pagada else (0.75 if kind == "sin_factura" else 1.0),
@@ -1094,7 +1739,7 @@ class CajaView(ft.Container):
             )
             self.months_sub.color = COLORS["accent_warning"]
         else:
-            self.months_sub.value = f"Sin deuda · {n_sel} en este cobro"
+            self.months_sub.value = f"Sin deuda de agua · {n_sel} en este cobro"
             self.months_sub.color = COLORS["accent_success"]
         self._u(self.months_sub)
 
@@ -1107,16 +1752,28 @@ class CajaView(ft.Container):
         """Volta à seleção padrão: tudo que ele deve, nada de adelanto."""
         for c in self._cells:
             c["sel"] = c["estado"] == "pendente"
+        for c in self._cargos:
+            c["sel"] = True
         self._render_months()
+        self._render_cargos()
         self._recompute(prefill=True)
 
     def _clear_selection(self):
         for c in self._cells:
             c["sel"] = False
+        for c in self._cargos:
+            c["sel"] = False
         self._render_months()
+        self._render_cargos()
         self._recompute(prefill=True)
 
     def _load_recent(self, client_id: str):
+        """
+        Últimos pagos — e cada linha reimprime o recibo dela.
+
+        Era texto morto: o cajero via a data e o valor e não podia fazer nada com
+        aquilo. O caso mais comum do balcão é "perdí el recibo".
+        """
         try:
             pays = payment_service.list_by_client(client_id, limit=3)
         except Exception:
@@ -1126,20 +1783,40 @@ class CajaView(ft.Container):
             nro = p.get("numero_recibo")
             rec = f"Rec. {int(nro):05d}" if nro not in (None, "") else "Rec. —"
             fecha = format_local(p.get("fecha_pago"), "%d/%m/%Y")
+            grupo = p.get("grupo_pagamento")
             rows.append(ft.Container(
                 content=ft.Row([
                     ft.Text(fecha, size=13, color=COLORS["text_secondary"], width=90),
                     ft.Text(rec, size=11, color=COLORS["text_muted"]),
                     ft.Container(expand=True),
                     ft.Text(_money(p.get("valor_total", 0)), size=13, weight=ft.FontWeight.W_600, color=COLORS["text_primary"]),
+                    ft.Icon(ft.Icons.PRINT_OUTLINED, size=14, color=COLORS["text_muted"]),
                 ], spacing=10),
                 padding=ft.Padding.symmetric(horizontal=0, vertical=7),
                 border=ft.Border.only(top=ft.BorderSide(1, COLORS["border_subtle"])) if rows else None,
+                tooltip="Reimprimir este recibo" if grupo else None,
+                ink=bool(grupo),
+                on_click=(lambda e, g=grupo, r=rec: self._bg(lambda: self._reimprimir_recibo(g, r)))
+                if grupo else None,
             ))
         if not rows:
             rows = [ft.Text("Sin pagos registrados.", size=12, color=COLORS["text_muted"])]
         self.recent_pays.controls = rows
         self._u(self.recent_pays)
+
+    def _reimprimir_recibo(self, grupo: str, etiqueta: str = ""):
+        try:
+            result = payment_service.get_by_group(grupo)
+            payload = dict(result)
+            payload["company"] = self._get_company()
+            printer_manager.print_pdf(self._g_receipt.generate(payload),
+                                      printer_type="thermal",
+                                      job_name=f"receipt_{str(grupo)[:20]}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Caja] reprint_receipt_failed err={exc}")
+            self.show_snackbar("No se pudo reimprimir el recibo.", error=True)
+            return
+        self.show_snackbar(f"{etiqueta or 'Recibo'} reimpreso.")
 
     def _legend(self, icon, color: str, label: str) -> ft.Control:
         return ft.Row([
@@ -1195,41 +1872,130 @@ class CajaView(ft.Container):
 
     # ---------------------------------------------------------------- totais
     def _selected_total(self) -> tuple:
+        """(deuda de agua, otros cargos, adelanto, nº de meses adelantados)."""
         deuda = sum(c["saldo"] for c in self._cells if c["estado"] == "pendente" and c["sel"])
+        cargos = sum(float(c["f"].get("saldo_devedor") or 0)
+                     for c in self._cargos if c["sel"])
         adv_cells = [c for c in self._cells if c["estado"] == "sem_factura" and c["sel"]]
         adv = self._tarifa * len(adv_cells)
-        return deuda, adv, len(adv_cells)
+        return deuda, cargos, adv, len(adv_cells)
 
-    def _render_detail(self):
-        """Uma linha por mês cobrado, na ordem do calendário."""
-        rows = []
+    def _total_seleccionado(self) -> float:
+        deuda, cargos, adv, _ = self._selected_total()
+        return deuda + cargos + adv
+
+    def _targets(self) -> list:
+        """
+        O que vai ser pago, na MESMA ordem que o backend usa (ano, mês, emissão).
+
+        Serve para duas coisas que precisam bater com a realidade: mostrar o que
+        sobra na fatura mais antiga num pagamento parcial, e montar a factura
+        legal com os valores realmente aplicados.
+        """
+        alvos = []
         for c in self._cells:
             if not c["sel"] or c["estado"] == "pagada":
                 continue
-            kind = self._kind(c)
-            tag = {"deuda": "deuda", "adelanto": "adelanto", "sin_factura": "sin factura"}[kind]
-            tag_col = COLORS["accent_warning"] if kind == "deuda" else COLORS["accent_secondary"]
+            if c["estado"] == "pendente":
+                for iid in c["invoice_ids"]:
+                    f = self._facturas.get(iid)
+                    if not f:
+                        continue
+                    alvos.append({
+                        "kind": "deuda", "id": iid, "ano": c["ano"], "mes": c["mes"],
+                        "emision": str(f.get("fecha_emision") or ""),
+                        "saldo": float(f.get("saldo_devedor") or 0),
+                        "cuota": float(f.get("cuota_valor") or 0), "factura": f,
+                    })
+            elif c["estado"] == "sem_factura":
+                # Fatura que ainda não existe: o backend cria agora, então ela
+                # entra depois das reais do mesmo período.
+                alvos.append({
+                    "kind": self._kind(c), "id": None, "ano": c["ano"], "mes": c["mes"],
+                    "emision": _FUTURO, "saldo": float(self._tarifa), "cuota": 0.0,
+                    "factura": None,
+                })
+        for c in self._cargos:
+            if not c["sel"]:
+                continue
+            f = c["f"]
+            alvos.append({
+                "kind": "cargo", "id": f.get("id"),
+                "ano": int(f.get("ano_referencia") or 0),
+                "mes": int(f.get("mes_referencia") or 1),
+                "emision": str(f.get("fecha_emision") or ""),
+                "saldo": float(f.get("saldo_devedor") or 0), "cuota": 0.0, "factura": f,
+            })
+        alvos.sort(key=lambda a: (a["ano"], a["mes"], a["emision"]))
+        return alvos
+
+    def _reparto(self, monto: float) -> list:
+        """Distribui `monto` nos alvos, da mais antiga para a mais nova."""
+        restante = float(monto or 0)
+        salida = []
+        for a in self._targets():
+            if restante <= 0:
+                aplicado = 0.0
+            else:
+                aplicado = min(restante, a["saldo"])
+                restante -= aplicado
+            item = dict(a)
+            item["aplicado"] = aplicado
+            item["resto"] = a["saldo"] - aplicado
+            salida.append(item)
+        return salida
+
+    def _render_detail(self):
+        """Uma linha por item cobrado, na ordem em que o dinheiro vai cair."""
+        cobrar = self._cobro_amount()
+        rows = []
+        for a in self._reparto(cobrar):
+            if a["aplicado"] <= 0 and a["resto"] > 0 and cobrar > 0:
+                tag, tag_col = "queda pendiente", COLORS["text_muted"]
+            elif a["kind"] == "cargo":
+                tag, tag_col = "otros cargos", COLORS["accent_secondary"]
+            elif a["kind"] == "adelanto":
+                tag, tag_col = "adelanto", COLORS["accent_secondary"]
+            elif a["kind"] == "sin_factura":
+                tag, tag_col = "sin factura", COLORS["accent_secondary"]
+            elif a["cuota"]:
+                tag, tag_col = "incluye cuota", COLORS["accent_secondary"]
+            else:
+                tag, tag_col = "deuda", COLORS["accent_warning"]
+
+            etiqueta = (self._cargo_label(a["factura"])[:18] if a["kind"] == "cargo"
+                        else f"{_MES[a['mes'] - 1]} {a['ano']}")
+            valor = a["aplicado"] if cobrar > 0 else a["saldo"]
             rows.append(ft.Row([
-                ft.Text(f"{_MES[c['mes'] - 1]} {c['ano']}", size=13,
-                        weight=ft.FontWeight.W_600, color=COLORS["text_primary"], width=86),
+                ft.Text(etiqueta, size=13, weight=ft.FontWeight.W_600,
+                        color=COLORS["text_primary"], width=96,
+                        overflow=ft.TextOverflow.ELLIPSIS),
                 ft.Text(tag, size=11, color=tag_col),
                 ft.Container(expand=True),
-                ft.Text(_money(c["saldo"] if kind == "deuda" else self._tarifa), size=13,
-                        weight=ft.FontWeight.W_600, color=COLORS["text_primary"]),
+                ft.Text(_money(valor), size=13, weight=ft.FontWeight.W_600,
+                        color=COLORS["text_primary"] if valor > 0 else COLORS["text_muted"]),
             ], spacing=7, height=26))
         if not rows:
             rows = [ft.Container(
-                content=ft.Text("Ningún mes seleccionado.", size=12, color=COLORS["text_muted"]),
+                content=ft.Text("Nada seleccionado.", size=12, color=COLORS["text_muted"]),
                 height=26,
             )]
         self.detail_list.controls = rows
         self.detail_list.height = min(182, 26 * len(rows))
         self._u(self.detail_list)
 
+    def _cobro_amount(self) -> float:
+        """O que vai ser lançado na conta do cliente (default: tudo o selecionado)."""
+        v = self._parse_amount(self.cobrar_field.value)
+        if v is None:
+            return self._total_seleccionado()
+        return max(0.0, v)
+
     def _recompute(self, prefill: bool = False):
-        deuda, adv, adv_n = self._selected_total()
-        total = deuda + adv
+        deuda, cargos, adv, adv_n = self._selected_total()
+        total = deuda + cargos + adv
         self.brk_deuda.value = _money(deuda)
+        self.brk_cargos.value = _money(cargos)
         self.brk_adv.value = _money(adv)
         self.brk_adv_n.value = f"({adv_n} {'mes' if adv_n == 1 else 'meses'})" if adv_n else ""
         # O rótulo segue o que de fato está na conta: adelanto, mês não faturado ou os dois.
@@ -1238,84 +2004,299 @@ class CajaView(ft.Container):
             frozenset({"adelanto"}): "Adelanto",
             frozenset({"sin_factura"}): "Meses no facturados",
         }.get(frozenset(kinds), "Adelanto y no facturados")
-        # Só vale a pena separar deuda x adelanto quando há adelanto na conta.
-        self.brk_box.visible = adv_n > 0
+        self.brk_adv_row.visible = adv_n > 0
+        self.brk_cargos_row.visible = cargos > 0
+        # Só vale a pena abrir a conta quando há mais de uma natureza nela.
+        self.brk_box.visible = adv_n > 0 or cargos > 0
         self._u(self.brk_adv_lbl)
         self.total_text.value = _money(total)
+
+        if prefill:
+            self.cobrar_field.value = f"{int(round(total))}" if total else ""
+            self._u(self.cobrar_field)
+            self.recibi_field.value = self.cobrar_field.value
+            self._u(self.recibi_field)
+
         self._render_detail()
         self._render_months_header()
+        self._render_parcial(total)
         self._u(self.brk_box)
-        if prefill:
-            self.recibi_field.value = f"{int(round(total))}" if total else ""
-            self._u(self.recibi_field)
-        self._update_vuelto(total)
-        for c in (self.brk_deuda, self.brk_adv, self.brk_adv_n, self.total_text):
+        self._u(self.brk_adv_row)
+        self._u(self.brk_cargos_row)
+        self._update_vuelto()
+        for c in (self.brk_deuda, self.brk_cargos, self.brk_adv, self.brk_adv_n,
+                  self.total_text):
             self._u(c)
 
-    def _update_vuelto(self, total: float):
-        recibi = self._parse_amount(self.recibi_field.value) or 0
-        diff = recibi - total
-        if diff >= 0:
-            self.vuelto_lbl.value = "VUELTO"
-            self.vuelto_val.value = _money(diff)
-            self.vuelto_val.color = COLORS["accent_success"]
-            self.vuelto_lbl.color = "#5FD6AB"
-            self.vuelto_box.bgcolor = ft.Colors.with_opacity(0.12, COLORS["accent_success"])
-            self.vuelto_box.border = ft.Border.all(1, ft.Colors.with_opacity(0.28, COLORS["accent_success"]))
+    def _render_parcial(self, total: float):
+        """
+        Diz em voz alta o que um pagamento parcial deixa em aberto.
+
+        O backend sempre soube receber menos que o total (aplica na mais antiga e
+        deixa a fatura PARCIAL); o que faltava era a tela contar isso ao cajero,
+        que precisa avisar o cliente antes, não depois.
+        """
+        cobrar = self._cobro_amount()
+        if total <= 0:
+            self.parcial_txt.visible = False
+            self._u(self.parcial_txt)
+            return
+        if cobrar > total:
+            self.parcial_txt.value = (
+                f"Estás cobrando {_money(cobrar - total)} más de lo seleccionado. "
+                "Agregá otro mes o bajá el valor.")
+            self.parcial_txt.color = COLORS["accent_error"]
+            self.parcial_txt.visible = True
+            self._u(self.parcial_txt)
+            return
+        if abs(cobrar - total) < 1:
+            self.parcial_txt.visible = False
+            self._u(self.parcial_txt)
+            return
+
+        pendientes = [a for a in self._reparto(cobrar) if a["resto"] > 0]
+        if not pendientes:
+            self.parcial_txt.visible = False
+            self._u(self.parcial_txt)
+            return
+        primera = pendientes[0]
+        etiqueta = (self._cargo_label(primera["factura"]) if primera["kind"] == "cargo"
+                    else f"{_MES[primera['mes'] - 1]}/{primera['ano']}")
+        resto_total = sum(a["resto"] for a in pendientes)
+        extra = (f" (y {len(pendientes) - 1} más, {_money(resto_total - primera['resto'])})"
+                 if len(pendientes) > 1 else "")
+        self.parcial_txt.value = (
+            f"Pago parcial: quedan {_money(primera['resto'])} en {etiqueta}{extra}. "
+            "La factura queda como pago parcial y sigue en deuda.")
+        self.parcial_txt.color = COLORS["accent_warning"]
+        self.parcial_txt.visible = True
+        self._u(self.parcial_txt)
+
+    def _update_vuelto(self):
+        cobrar = self._cobro_amount()
+        recibi = self._parse_amount(self.recibi_field.value)
+        if self.metodo != "EFECTIVO":
+            # Transferencia/cheque não têm gaveta: não existe vuelto.
+            self.vuelto_lbl.value = "SIN VUELTO"
+            self.vuelto_val.value = _money(0)
+            self.vuelto_val.color = COLORS["text_muted"]
+            self.vuelto_lbl.color = COLORS["text_muted"]
+            self.vuelto_box.bgcolor = COLORS["bg_input"]
+            self.vuelto_box.border = ft.Border.all(1, COLORS["border"])
         else:
-            self.vuelto_lbl.value = "FALTA"
-            self.vuelto_val.value = _money(-diff)
-            self.vuelto_val.color = COLORS["accent_error"]
-            self.vuelto_lbl.color = "#F0899B"
-            self.vuelto_box.bgcolor = ft.Colors.with_opacity(0.10, COLORS["accent_error"])
-            self.vuelto_box.border = ft.Border.all(1, ft.Colors.with_opacity(0.3, COLORS["accent_error"]))
+            diff = (recibi or 0) - cobrar
+            if diff >= 0:
+                self.vuelto_lbl.value = "VUELTO"
+                self.vuelto_val.value = _money(diff)
+                self.vuelto_val.color = COLORS["accent_success"]
+                self.vuelto_lbl.color = "#5FD6AB"
+                self.vuelto_box.bgcolor = ft.Colors.with_opacity(0.12, COLORS["accent_success"])
+                self.vuelto_box.border = ft.Border.all(1, ft.Colors.with_opacity(0.28, COLORS["accent_success"]))
+            else:
+                self.vuelto_lbl.value = "FALTA"
+                self.vuelto_val.value = _money(-diff)
+                self.vuelto_val.color = COLORS["accent_error"]
+                self.vuelto_lbl.color = "#F0899B"
+                self.vuelto_box.bgcolor = ft.Colors.with_opacity(0.10, COLORS["accent_error"])
+                self.vuelto_box.border = ft.Border.all(1, ft.Colors.with_opacity(0.3, COLORS["accent_error"]))
         self._u(self.vuelto_lbl)
         self._u(self.vuelto_val)
         self._u(self.vuelto_box)
 
+    def _on_cobrar_change(self, e):
+        self._render_detail()
+        self._render_parcial(self._total_seleccionado())
+        if self.metodo != "EFECTIVO":
+            self.recibi_field.value = self.cobrar_field.value
+            self._u(self.recibi_field)
+        self._update_vuelto()
+
     def _on_recibi_change(self, e):
-        deuda, adv, _ = self._selected_total()
-        self._update_vuelto(deuda + adv)
+        self._update_vuelto()
+
+    def _focus_recibi(self):
+        self._focus(self.recibi_field)
+
+    def _set_cobrar(self, factor):
+        """`None` = tudo o selecionado; negativo = fração (−0.5 = metade)."""
+        total = self._total_seleccionado()
+        valor = total if factor is None else total * abs(factor)
+        self.cobrar_field.value = f"{int(round(valor))}" if valor else ""
+        self._u(self.cobrar_field)
+        self.recibi_field.value = self.cobrar_field.value
+        self._u(self.recibi_field)
+        self._render_detail()
+        self._render_parcial(total)
+        self._update_vuelto()
 
     def _set_recibi(self, value):
-        deuda, adv, _ = self._selected_total()
         if value is None:  # "Exacto"
-            value = deuda + adv
+            value = self._cobro_amount()
         self.recibi_field.value = f"{int(round(value))}"
         self._u(self.recibi_field)
-        self._update_vuelto(deuda + adv)
+        self._update_vuelto()
+
+    # ------------------------------------------------------------- em espera
+    def _parkear(self):
+        """
+        Guarda o atendimento atual e libera o balcão.
+
+        Só na memória do app: nada foi cobrado ainda, então não há dinheiro nem
+        documento para perder se o app fechar.
+        """
+        if not self._ctx:
+            return
+        client = self._ctx.get("client") or {}
+        self._espera.append({
+            "ctx": self._ctx,
+            "meses": {(c["ano"], c["mes"]) for c in self._cells if c["sel"]},
+            "cargos": {c["f"]["id"] for c in self._cargos if c["sel"]},
+            "cobrar": self.cobrar_field.value,
+            "meses_futuro": self._meses_futuro,
+            "nombre": client.get("nombre_completo", "-"),
+        })
+        self._render_espera()
+        self._reset()
+        self.show_snackbar(f"{client.get('nombre_completo', 'Atención')} quedó en espera.")
+        self._focus(self.search_field)
+
+    def _render_espera(self):
+        chips = []
+        for i, item in enumerate(self._espera):
+            chips.append(ft.Container(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.PAUSE_CIRCLE_OUTLINE, size=14,
+                            color=COLORS["accent_warning"]),
+                    ft.Text(item["nombre"][:22], size=12, weight=ft.FontWeight.W_600,
+                            color=COLORS["text_primary"]),
+                    ft.Icon(ft.Icons.CLOSE, size=13, color=COLORS["text_muted"]),
+                ], spacing=6, tight=True),
+                padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+                bgcolor=COLORS["bg_input"], border_radius=RADIUS["pill"],
+                border=ft.Border.all(1, ft.Colors.with_opacity(0.4, COLORS["accent_warning"])),
+                tooltip="Retomar este atendimiento (F8 retoma el primero)",
+                ink=True, on_click=lambda e, idx=i: self._retomar(idx),
+            ))
+        self.espera_row.controls = chips
+        self.espera_row.visible = bool(chips)
+        self._u(self.espera_row)
+
+    def _retomar(self, idx: int = 0):
+        if not self._espera or idx >= len(self._espera):
+            return
+        item = self._espera.pop(idx)
+        self._render_espera()
+        self._meses_futuro = item.get("meses_futuro", self.MESES_FUTURO_INICIAL)
+        cid = (item["ctx"].get("client") or {}).get("id")
+
+        def work():
+            # Recarrega o contexto: entre o parkeo e a volta pode ter entrado
+            # pagamento, leitura ou cargo novo — a tela não pode cobrar por um
+            # retrato velho.
+            self._select_client(cid, self._meses_futuro,
+                                preservar={"meses": item["meses"], "cargos": item["cargos"]})
+            if item.get("cobrar"):
+                self.cobrar_field.value = item["cobrar"]
+                self._u(self.cobrar_field)
+                self._on_cobrar_change(None)
+
+        self._bg(work)
+
+    # ---------------------------------------------------------------- acordo
+    def _open_acuerdo(self):
+        if not self._ctx:
+            self.show_snackbar("Elegí un cliente para armar el plan de pagos.", error=True)
+            return
+        if not self._sesion:
+            self.show_snackbar("Abrí la caja antes de cerrar un acuerdo.", error=True)
+            return
+        facturas = [f for f in (self._ctx.get("facturas") or [])
+                    if float(f.get("saldo_devedor") or 0) > 0]
+        if not facturas and not self._ctx.get("acuerdo"):
+            self.show_snackbar("Este cliente no tiene deuda para parcelar.")
+            return
+
+        def _after(_r):
+            cid = (self._ctx.get("client") or {}).get("id")
+            if cid:
+                self._bg(lambda: self._select_client(cid))
+
+        self._track(open_acuerdo_dialog(
+            self.page, self.show_snackbar, self._ctx, self._get_company,
+            metodo=self.metodo, on_done=_after))
+
+    # ------------------------------------------------------- turno / gaveta
+    def _open_atenciones(self):
+        if not self.page:
+            return
+        self._track(open_atenciones_dialog(
+            self.page, self.show_snackbar, self._get_company,
+            on_changed=self._refrescar_cliente))
+
+    def _refrescar_cliente(self):
+        """Depois de anular algo, o cliente na tela pode ter voltado a dever."""
+        if not self._ctx:
+            return
+        cid = (self._ctx.get("client") or {}).get("id")
+        if cid:
+            self._bg(lambda: self._select_client(cid, self._meses_futuro))
+
+    def _open_resumen(self):
+        if not self._sesion:
+            self.show_snackbar("No hay turno abierto.", error=True)
+            return
+        self._track(open_resumen_dialog(self.page, self.show_snackbar, self._sesion))
+
+    def _open_movimiento(self, categoria: str):
+        if not self._sesion:
+            self.show_snackbar("Abrí la caja antes de mover plata de la gaveta.", error=True)
+            return
+        self._track(open_movimiento_dialog(self.page, self.show_snackbar, categoria))
 
     # ---------------------------------------------------------------- cobrar
     def _confirm(self):
         if not self._ctx:
+            self.show_snackbar("Elegí un cliente para cobrar.", error=True)
             return
         if not self._sesion:
             self.show_snackbar("Abrí la caja antes de cobrar.", error=True)
             return
-        deuda, adv, _ = self._selected_total()
-        total = deuda + adv
+        total = self._total_seleccionado()
         if total <= 0:
-            self.show_snackbar("Seleccioná al menos un mes para cobrar.", error=True)
-            return
-        recibi = self._parse_amount(self.recibi_field.value)
-        if recibi is None or recibi < total:
-            self.show_snackbar("El monto recibido no cubre el total.", error=True)
+            self.show_snackbar(
+                "Seleccioná al menos un mes o un cargo para cobrar.", error=True)
             return
 
-        invoice_ids = []
-        prepay = []
-        for c in self._cells:
-            if not c["sel"]:
-                continue
-            if c["estado"] == "pendente":
-                invoice_ids.extend(c["invoice_ids"])
-            elif c["estado"] == "sem_factura":
-                prepay.append({"mes": c["mes"], "ano": c["ano"]})
+        cobrar = self._parse_amount(self.cobrar_field.value)
+        if cobrar is None:
+            cobrar = total
+        if cobrar <= 0:
+            self.show_snackbar("El valor a cobrar tiene que ser mayor a cero.", error=True)
+            return
+        if cobrar - total > 0.5:
+            self.show_snackbar(
+                f"Estás cobrando más de lo seleccionado ({_money(cobrar)} sobre "
+                f"{_money(total)}). Agregá otro mes o bajá el valor.", error=True)
+            return
+
+        if self.metodo == "EFECTIVO":
+            recibi = self._parse_amount(self.recibi_field.value)
+            if recibi is None or recibi < cobrar - 0.5:
+                self.show_snackbar(
+                    "El efectivo recibido no cubre el valor a cobrar. "
+                    "Corregí «Recibí» o bajá el valor a cobrar.", error=True)
+                return
+
+        # Alvos que de fato recebem dinheiro: num pagamento parcial não se manda
+        # ao backend a fatura que não vai receber nada.
+        reparto = [a for a in self._reparto(cobrar) if a["aplicado"] > 0]
+        invoice_ids = [a["id"] for a in reparto if a["id"]]
+        prepay = [{"mes": a["mes"], "ano": a["ano"]} for a in reparto if not a["id"]]
 
         client = self._ctx.get("client") or {}
         payload = {
             "client_id": client.get("id"),
-            "valor_total": total,
+            "valor_total": cobrar,
             "metodo": self.metodo,
             "aplicar_subsidio": bool(client.get("has_sponsor")),
             "invoice_ids": invoice_ids or None,
@@ -1330,7 +2311,7 @@ class CajaView(ft.Container):
 
         # Factura legal: SEMPRE confere antes (na thread da UI). Emitida errada, a
         # única saída é cancelación no SET — conferir na tela é muito mais barato.
-        self._open_conferencia(client, payload, self._build_factura_items())
+        self._open_conferencia(client, payload, self._build_factura_items(reparto))
 
     def _do_confirm_recibo(self, payload: dict):
         try:
@@ -1347,7 +2328,19 @@ class CajaView(ft.Container):
         self._reset()
 
     # ------------------------------------------------------ factura legal (SIFEN)
-    def _build_factura_items(self) -> list:
+    def _build_factura_items(self, reparto: list) -> list:
+        """
+        Linhas da factura legal a partir do que REALMENTE vai ser aplicado.
+
+        O total do DTE tem de casar com o cobro — se o cliente paga parcial, a
+        linha sai com o valor aplicado, não com o saldo cheio.
+
+        IVA por natureza: água usa o das configurações; a cuota do acordo usa o
+        que foi escolhido no acordo; otros cargos usam o IVA dos próprios itens da
+        fatura AVULSA. Quando um cargo recebe pagamento parcial não há como
+        ratear itens de IVA diferente com honestidade, então sai uma linha só, com
+        o IVA do primeiro item.
+        """
         company = self._get_company()
         try:
             tasa = int(company.get("iva_tasa_agua", 10) or 10)
@@ -1357,19 +2350,67 @@ class CajaView(ft.Container):
             afect = int(company.get("iva_afectacion_agua", 1) or 1)
         except Exception:
             afect = 1
+
         items = []
-        for c in self._cells:
-            if not c["sel"] or c["estado"] not in ("pendente", "sem_factura"):
+        for a in reparto:
+            aplicado = int(round(a["aplicado"]))
+            if aplicado <= 0:
                 continue
-            precio = int(round(c["saldo"] if c["estado"] == "pendente" else self._tarifa))
-            if precio <= 0:
+            per = f"{_MES[a['mes'] - 1]}/{a['ano']}"
+            f = a["factura"] or {}
+
+            if a["kind"] == "cargo":
+                sub_items = f.get("items") or []
+                completo = a["resto"] <= 0.5
+                if sub_items and completo:
+                    for it in sub_items:
+                        precio = int(round(float(it.get("precio_unitario") or 0)))
+                        cant = int(it.get("cantidad") or 1)
+                        if precio * cant <= 0:
+                            continue
+                        items.append({
+                            "descripcion": str(it.get("descripcion") or "Cargo")[:120],
+                            "cantidad": cant, "precio_unit": precio,
+                            "tasa_iva": int(it.get("iva_tasa") or tasa),
+                            "afectacion": int(it.get("iva_afectacion") or afect),
+                            "codigo": "2",
+                        })
+                    continue
+                primero = sub_items[0] if sub_items else {}
+                items.append({
+                    "descripcion": f"{self._cargo_label(f)} {per}"[:120],
+                    "cantidad": 1, "precio_unit": aplicado,
+                    "tasa_iva": int(primero.get("iva_tasa") or tasa),
+                    "afectacion": int(primero.get("iva_afectacion") or afect),
+                    "codigo": "2",
+                })
                 continue
-            per = f"{_MES[c['mes'] - 1]}/{c['ano']}"
-            # Só o mês por vir é adelanto; mês passado sem fatura é serviço comum.
-            desc = (f"Servicio de agua (adelanto) {per}" if self._kind(c) == "adelanto"
-                    else f"Servicio de agua {per}")
-            items.append({"descripcion": desc, "cantidad": 1, "precio_unit": precio,
-                          "tasa_iva": tasa, "afectacion": afect, "codigo": "1"})
+
+            # Água: separa a parte que é cuota de acordo, com o IVA do acordo.
+            cuota = float(a.get("cuota") or 0)
+            agua = aplicado
+            cuota_aplicada = 0
+            if cuota > 0:
+                # A cuota é a última parte a ser coberta dentro da fatura do mês:
+                # o que o cliente paga vai primeiro no consumo.
+                parte_agua = max(0.0, a["saldo"] - cuota)
+                agua = int(round(min(aplicado, parte_agua)))
+                cuota_aplicada = aplicado - agua
+            if agua > 0:
+                desc = (f"Servicio de agua (adelanto) {per}" if a["kind"] == "adelanto"
+                        else f"Servicio de agua {per}")
+                items.append({"descripcion": desc, "cantidad": 1, "precio_unit": int(agua),
+                              "tasa_iva": tasa, "afectacion": afect, "codigo": "1"})
+            if cuota_aplicada > 0:
+                numero = f.get("cuota_numero")
+                items.append({
+                    "descripcion": (f"Cuota {numero} de acuerdo de pago {per}"
+                                    if numero else f"Cuota de acuerdo de pago {per}"),
+                    "cantidad": 1, "precio_unit": int(cuota_aplicada),
+                    "tasa_iva": int(f.get("cuota_iva_tasa") or tasa),
+                    "afectacion": int(f.get("cuota_iva_afectacion") or afect),
+                    "codigo": "3",
+                })
         return items
 
     def _needs_conferencia(self, client: dict) -> bool:
@@ -1389,10 +2430,9 @@ class CajaView(ft.Container):
         vez emitido, só sai por cancelación no SET. O cajero vê o receptor e as
         linhas que vão para o SET, e corrige o receptor aqui mesmo.
 
-        Editável é só o receptor. Os itens saem dos meses selecionados na grade e
-        o total tem de casar com o cobro que vai ser registrado — mexer no preço
-        aqui faria a factura divergir do recibo. Para mudar valores, fecha e muda
-        a seleção.
+        Editável é só o receptor. Os itens saem do que vai ser cobrado e o total
+        tem de casar com o cobro que vai ser registrado — mexer no preço aqui faria
+        a factura divergir do recibo. Para mudar valores, fecha e muda a seleção.
         """
         client_id = client.get("id")
         faltando = self._needs_conferencia(client)
@@ -1494,7 +2534,7 @@ class CajaView(ft.Container):
                 ft.Text("Lo que edites acá se guarda en la ficha del cliente.",
                         size=12, color=COLORS["text_muted"]),
                 detalle,
-                ft.Text("Para cambiar montos, cerrá y ajustá los meses seleccionados.",
+                ft.Text("Para cambiar montos, cerrá y ajustá lo seleccionado.",
                         size=11, color=COLORS["text_muted"]),
             ], spacing=12, tight=True, scroll=ft.ScrollMode.AUTO),
             actions=[
@@ -1503,6 +2543,7 @@ class CajaView(ft.Container):
             ],
             width_pct=0.45,
         )
+        self._track(modal)
 
         def _save_and_emit():
             new_nombre = (nombre_field.value or "").strip()
@@ -1581,21 +2622,31 @@ class CajaView(ft.Container):
         emission_id = job.get("id")
         self._reset()
         if emission_id:
-            open_sifen_progress(self.page, self.show_snackbar, emission_id=emission_id,
-                                receptor=f"{nombre or '-'} · {doc}")
+            self._track(open_sifen_progress(
+                self.page, self.show_snackbar, emission_id=emission_id,
+                receptor=f"{nombre or '-'} · {doc}"))
         else:
             self.show_snackbar("✓ Cobro registrado · factura en cola")
 
     def _reset(self):
         self._ctx = None
         self._cells = []
+        self._cargos = []
+        self._facturas = {}
         self.client_block.visible = False
+        self.cargos_block.visible = False
+        self.acuerdo_box.visible = False
         self.search_field.value = ""
+        self.cobrar_field.value = ""
         self.recibi_field.value = ""
+        self.parcial_txt.visible = False
         self.confirm_btn.disabled = False
         self._recompute()
         self._u(self.client_block)
+        self._u(self.cargos_block)
+        self._u(self.acuerdo_box)
         self._u(self.search_field)
+        self._u(self.parcial_txt)
         self._u(self.confirm_btn)
 
     # ---------------------------------------------------------------- impressão
@@ -1634,6 +2685,47 @@ class CajaView(ft.Container):
                 self._print_reactivation(result, company)
             except Exception as exc:
                 print(f"[Caja] print_reactivation_failed err={exc}")
+
+        # Acordo quitado por este pagamento: as faturas antigas saem junto do
+        # recibo da última parcela, como prova de que aquela dívida acabou.
+        if result.get("acuerdo_quitado"):
+            try:
+                self._print_acuerdo_quitado(result["acuerdo_quitado"], company)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[Caja] print_acuerdo_quitado_failed err={exc}")
+                self.show_snackbar(
+                    "El acuerdo quedó saldado, pero no se pudieron imprimir las "
+                    "facturas viejas.", error=True)
+
+    def _print_acuerdo_quitado(self, acuerdo: dict, company: dict):
+        facturas = acuerdo.get("facturas_anuladas") or []
+        impresas = 0
+        for f in facturas:
+            try:
+                detalle = invoice_service.get_with_balance(f.get("invoice_id"))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[Caja] acuerdo_invoice_fetch_failed err={exc}")
+                continue
+            client = self._ctx.get("client") if self._ctx else {}
+            payload = {
+                "invoice": detalle,
+                "client": {
+                    "name": (client or {}).get("nombre_completo", "-"),
+                    "ci_ruc": (client or {}).get("ci_ruc", "-"),
+                    "address": (client or {}).get("direccion", "-"),
+                    "meter": (client or {}).get("numero_medidor", "-"),
+                    "manzana": (client or {}).get("manzana", "-"),
+                    "lote": (client or {}).get("lote", "-"),
+                },
+                "company": company,
+            }
+            printer_manager.print_pdf(
+                self._g_invoice.generate(payload), printer_type="thermal",
+                job_name=f"acuerdo_{acuerdo.get('numero', '')}_inv_{impresas}")
+            impresas += 1
+        self.show_snackbar(
+            f"✓ Acuerdo Nº {acuerdo.get('numero_fmt', '')} saldado — "
+            f"{impresas} factura(s) vieja(s) impresa(s) como comprobante.")
 
     def _print_reactivation(self, result: dict, company: dict):
         notice = cutoff_service.get_notice(result.get("reactivation_notice_id")) or {}

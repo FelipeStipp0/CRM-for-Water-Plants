@@ -69,6 +69,22 @@ class AuthService:
             api.token = None
             return False
 
+    def verify_password(self, password: str) -> bool:
+        """
+        Confere a senha do usuario logado sem trocar token nem nada.
+
+        Usado pela pausa do Modo Caja: o cajero sai do balcao com o turno aberto e
+        a tela trancada, e quem destranca tem de ser ele — a gaveta continua no
+        nome dele ate o cierre.
+        """
+        from services.api_client import APIError
+
+        try:
+            r = api.post("/auth/verify-password", data={"password": password})
+        except APIError:
+            return False
+        return bool((r or {}).get("ok"))
+
     def change_password(self, current_password: str, new_password: str) -> dict:
         """
         Troca a senha do usuario.
