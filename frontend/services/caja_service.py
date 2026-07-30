@@ -56,6 +56,28 @@ class CajaService:
         """Sangrías e reposiciones do turno aberto."""
         return api.get("/caja/movimientos")
 
+    def productos(self) -> list[dict]:
+        """
+        Catálogo ativo, só leitura — atalho de preenchimento do cargo do balcão.
+
+        Não é `/products/`: aquele router exige o escopo `invoices`, que o cajero
+        não tem, e a chamada voltava **403**.
+        """
+        return api.get("/caja/productos")
+
+    def cargo(self, client_id: str, descripcion: str, valor: float,
+              cantidad: int = 1, iva_tasa: int = 10, iva_afectacion: int = 1) -> dict:
+        """
+        Fatura um cargo de valor livre para cobrar no mesmo atendimento.
+
+        Não é `POST /invoices/` pelo mesmo motivo de `productos()`: escopo. Exige
+        turno aberto e devolve a fatura AVULSA criada (com `id` e `numero_factura`).
+        """
+        return api.post("/caja/cargo", data={
+            "client_id": client_id, "descripcion": descripcion, "valor": valor,
+            "cantidad": cantidad, "iva_tasa": iva_tasa, "iva_afectacion": iva_afectacion,
+        })
+
     def sesiones(
         self, limit: int = 50, operador: Optional[str] = None,
         estado: Optional[str] = None,

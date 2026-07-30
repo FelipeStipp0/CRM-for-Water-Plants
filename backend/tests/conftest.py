@@ -17,6 +17,7 @@ from app.models.client import Client, ClientCategory, ClientStatus
 from app.models.reading import Reading
 from app.models.invoice import Invoice, InvoiceStatus, InvoiceType, Counter
 from app.models.payment import Payment
+from app.models.product import Product
 from app.models.settings import SystemSettings
 from app.models.finance import CashTransaction, Expense, Employee, Payroll, CashSession
 from app.models.sponsor import SponsorDebt, SponsorInvoice
@@ -44,6 +45,7 @@ async def test_db():
             Reading,
             Invoice,
             Counter,
+            Product,
             Payment,
             SystemSettings,
             CashTransaction,
@@ -91,7 +93,7 @@ async def test_client(test_db) -> AsyncGenerator[AsyncClient, None]:
         allow_headers=["*"],
     )
 
-    from app.routers import auth, clients, readings, invoices, payments, settings as settings_router, finance, cutoff as cutoff_router, caja, agreements
+    from app.routers import auth, clients, readings, invoices, payments, settings as settings_router, finance, cutoff as cutoff_router, caja, agreements, products
     test_app.include_router(auth.router, prefix="/auth", tags=["Autenticacao"])
     test_app.include_router(clients.router, prefix="/clients", tags=["Clientes"])
     test_app.include_router(readings.router, prefix="/readings", tags=["Leituras"])
@@ -103,6 +105,7 @@ async def test_client(test_db) -> AsyncGenerator[AsyncClient, None]:
     test_app.include_router(cutoff_router.qr_router, prefix="/cutoff", tags=["Corte QR"])
     test_app.include_router(caja.router, prefix="/caja", tags=["Caja"])
     test_app.include_router(agreements.router, prefix="/agreements", tags=["Acuerdos"])
+    test_app.include_router(products.router, prefix="/products", tags=["Produtos"])
 
     transport = ASGITransport(app=test_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -125,10 +128,10 @@ async def test_user(test_db) -> User:
     return user
 
 
-@pytest_asyncio.fixture
-async def auth_headers(test_user: User, monkeypatch) -> dict:
+@pytest.fixture
+def headers_for(monkeypatch):
     """
-    Headers de autenticacao para testes.
+    Fabrica headers de autenticacao para QUALQUER usuario.
 
     O token de producao carrega `sub` + `org` (o slug da junta), e cada request
     reativa o banco daquela org antes de buscar o usuario. Aqui o banco de teste
@@ -138,6 +141,11 @@ async def auth_headers(test_user: User, monkeypatch) -> dict:
 
     O caminho de autenticacao em si continua real — token invalido segue dando
     401, porque quem recusa e o decode, nao esta fixture.
+
+    Use isto em vez de montar o token na mao no teste: um token sem `org` toma
+    401 em tudo, e o teste passa a medir o proprio token em vez da regra. Foi
+    assim que o teste do escopo `caja` passou a verificar nada — 401 tambem
+    satisfaz um `!= 403`.
     """
     from app.middleware.org_context import set_org_slug
 
@@ -148,10 +156,19 @@ async def auth_headers(test_user: User, monkeypatch) -> dict:
     monkeypatch.setattr(
         "app.middleware.org_context.activate_org_db", _activate_org_db_test)
 
-    token = create_access_token(data={
-        "sub": test_user.username, "org": "test", "role": test_user.role,
-    })
-    return {"Authorization": f"Bearer {token}"}
+    def _build(user: User) -> dict:
+        token = create_access_token(data={
+            "sub": user.username, "org": "test", "role": user.role,
+        })
+        return {"Authorization": f"Bearer {token}"}
+
+    return _build
+
+
+@pytest_asyncio.fixture
+async def auth_headers(test_user: User, headers_for) -> dict:
+    """Headers de autenticacao do usuario padrao dos testes (escopo `*`)."""
+    return headers_for(test_user)
 
 
 @pytest_asyncio.fixture

@@ -7,18 +7,24 @@ Testes do que o balcão precisa do backend (Fases 0, 1, 2 e 5 do plano da caja).
 - `payment-context` separa otros cargos (AVULSA) da grade de meses de água, e a
   grade marca a parte do mês que é cuota de acordo;
 - `/payments/atenciones` acha o atendimento por nº de recibo, por cliente e por
-  dia, e diz se já foi anulado — é a base da reimpressão e da anulação no balcão.
+  dia, e diz se já foi anulado — é a base da reimpressão e da anulação no balcão;
+- `/caja/cargo` deixa o balcão faturar um cargo de valor livre **com o escopo
+  que ele tem** — os testes do cargo usam uma usuária de escopo `caja`, não o
+  usuário `*` dos outros testes, porque foi exatamente essa diferença que passou
+  batido e virou 403 na junta.
 """
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+import pytest_asyncio
 from httpx import AsyncClient
 
 from app.models.client import Client, ClientStatus
 from app.models.invoice import Invoice, InvoiceItem, InvoiceStatus, InvoiceType
 from app.models.payment import PaymentMethod
+from app.models.user import User
 from app.services.payment_distribution import PaymentDistributionService
 
 
@@ -233,62 +239,149 @@ async def test_atenciones_muestra_el_cobro_anulado(
 
 
 # ------------------------------- cargo de valor livre lançado no balcão
+@pytest_asyncio.fixture
+async def cajera(test_db) -> User:
+    """
+    Usuária de balcão: escopo `caja` e mais nada.
+
+    É ela que tem de conseguir lançar o cargo. Testar isto com o usuário padrão
+    (escopo `*`) não prova nada — foi assim que a primeira versão passou nos
+    testes e tomou **403** na junta.
+    """
+    from app.utils.security import get_password_hash
+
+    user = User(
+        username="cajera", email="cajera@example.com",
+        hashed_password=get_password_hash("x"), full_name="Cajera",
+        must_change_password=False, role="operator", scopes=["caja"],
+    )
+    await user.insert()
+    return user
+
+
 @pytest.mark.asyncio
 async def test_cargo_libre_del_mostrador_nace_cobrable_con_su_iva(
-        test_client: AsyncClient, auth_headers, test_settings, sample_client):
+        test_client: AsyncClient, headers_for, test_settings, sample_client, cajera):
     """
-    O balcão fatura na hora: `POST /invoices/` com valor e IVA livres.
+    O balcão fatura na hora, com valor e IVA livres, e cobra no mesmo atendimento.
 
     O plano original dizia que todo cargo nasce na tesouraria e o balcão só
     cobra — mas a junta não tem setores, e quem cobra tem de poder faturar o
-    que ninguém lançou. O cargo tem de sair do endpoint já pronto para ser
-    cobrado no mesmo atendimento: numerado, pendente e **com o IVA escolhido**,
-    que é o que vai para a factura legal.
+    que ninguém lançou. O cargo sai do endpoint pronto para ser cobrado:
+    numerado, pendente e **com o IVA escolhido**, que é o que vai para a
+    factura legal.
     """
-    hoy = date.today()
-    r = await test_client.post("/invoices/", headers=auth_headers, json={
+    from app.services.caja_service import abrir_caja
+
+    headers = headers_for(cajera)
+    await abrir_caja("cajera", Decimal("0"))
+
+    r = await test_client.post("/caja/cargo", headers=headers, json={
         "client_id": str(sample_client.id),
-        "tipo": "AVULSA",
-        "mes_referencia": hoy.month,
-        "ano_referencia": hoy.year,
-        "items": [{
-            "descripcion": "Multa por conexión clandestina",
-            "cantidad": 2,
-            "precio_unitario": 75000,
-            "iva_tasa": 5,
-            "iva_afectacion": 3,
-        }],
+        "descripcion": "Multa por conexión clandestina",
+        "cantidad": 2, "valor": 75000, "iva_tasa": 5, "iva_afectacion": 3,
     })
     assert r.status_code == 201, r.text
     creada = r.json()
     assert creada["numero_factura"]
     assert float(creada["valor_total"]) == 150000.0
 
-    # Sem o IVA por item, a AVULSA nascia sempre 10% gravado e a factura legal
-    # saía com o IVA errado — o cargo de valor livre não teria como ser exento.
-    assert creada["items"][0]["iva_tasa"] == 5
-    assert creada["items"][0]["iva_afectacion"] == 3
-
-    # E já aparece no balcão, em «otros cargos», pronto para entrar no cobro.
+    # E já aparece no balcão, em «otros cargos», com o IVA que a factura legal
+    # vai usar. Sem o IVA por item, toda AVULSA nascia 10% gravado e o cargo de
+    # valor livre não teria como ser exento.
     r = await test_client.get(f"/clients/{sample_client.id}/payment-context",
-                              headers=auth_headers)
+                              headers=headers)
     cargos = r.json()["otros_cargos"]
     assert len(cargos) == 1
     assert cargos[0]["id"] == creada["id"]
     assert float(cargos[0]["saldo_devedor"]) == 150000.0
     assert cargos[0]["items"][0]["iva_tasa"] == 5
+    assert cargos[0]["items"][0]["iva_afectacion"] == 3
 
 
 @pytest.mark.asyncio
-async def test_cargo_libre_rechaza_iva_invalido(
+async def test_el_mostrador_no_llega_al_modulo_de_facturas(
+        test_client: AsyncClient, headers_for, test_settings, sample_client, cajera):
+    """
+    Por que `/caja/cargo` existe: o cajero **não** passa em `/invoices` nem em
+    `/products`.
+
+    A primeira versão do cargo livre chamava `POST /invoices/` e `GET /products/`
+    e tomava 403 no balcão (visto nos logs de produção). Este teste é o guarda:
+    se alguém religar o balcão àqueles routers, quebra aqui e não na junta.
+    """
+    from app.services.caja_service import abrir_caja
+
+    headers = headers_for(cajera)
+    await abrir_caja("cajera", Decimal("0"))
+
+    hoy = date.today()
+    r = await test_client.post("/invoices/", headers=headers, json={
+        "client_id": str(sample_client.id), "tipo": "AVULSA",
+        "mes_referencia": hoy.month, "ano_referencia": hoy.year,
+        "items": [{"descripcion": "Cargo", "cantidad": 1, "precio_unitario": 1000}],
+    })
+    assert r.status_code == 403
+
+    assert (await test_client.get("/products/", headers=headers)).status_code == 403
+
+    # O que o balcão usa no lugar responde para ela.
+    assert (await test_client.get("/caja/productos", headers=headers)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_cargo_libre_exige_caja_abierta(
+        test_client: AsyncClient, headers_for, test_settings, sample_client, cajera):
+    """Cargo lançado com a caja fechada é fatura que ninguém viu nascer."""
+    r = await test_client.post("/caja/cargo", headers=headers_for(cajera), json={
+        "client_id": str(sample_client.id), "descripcion": "Reconexión",
+        "valor": 50000,
+    })
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cargo_libre_rechaza_iva_invalido_y_valor_cero(
+        test_client: AsyncClient, headers_for, test_settings, sample_client, cajera):
+    """IVA fora de 0/5/10 não existe no SIFEN — trava aqui, não no KuDE."""
+    from app.services.caja_service import abrir_caja
+
+    headers = headers_for(cajera)
+    await abrir_caja("cajera", Decimal("0"))
+    base = {"client_id": str(sample_client.id), "descripcion": "Cargo raro"}
+
+    r = await test_client.post("/caja/cargo", headers=headers,
+                               json={**base, "valor": 1000, "iva_tasa": 7})
+    assert r.status_code == 422
+
+    r = await test_client.post("/caja/cargo", headers=headers,
+                               json={**base, "valor": 0})
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_factura_avulsa_de_tesoreria_guarda_el_iva_del_producto(
         test_client: AsyncClient, auth_headers, test_settings, sample_client):
-    """IVA fora de 0/5/10 não existe no SIFEN — trava no schema, não no KuDE."""
+    """
+    O mesmo IVA por item no caminho da tesouraria (`POST /invoices/`).
+
+    Era descartado no schema: toda AVULSA nascia 10% gravado, e a factura legal
+    ignorava o IVA do produto do catálogo.
+    """
     hoy = date.today()
     r = await test_client.post("/invoices/", headers=auth_headers, json={
-        "client_id": str(sample_client.id),
-        "tipo": "AVULSA",
-        "mes_referencia": hoy.month,
-        "ano_referencia": hoy.year,
+        "client_id": str(sample_client.id), "tipo": "AVULSA",
+        "mes_referencia": hoy.month, "ano_referencia": hoy.year,
+        "items": [{"descripcion": "Cuota de conexión", "cantidad": 1,
+                   "precio_unitario": 300000, "iva_tasa": 5, "iva_afectacion": 3}],
+    })
+    assert r.status_code == 201, r.text
+    assert r.json()["items"][0]["iva_tasa"] == 5
+    assert r.json()["items"][0]["iva_afectacion"] == 3
+
+    r = await test_client.post("/invoices/", headers=auth_headers, json={
+        "client_id": str(sample_client.id), "tipo": "AVULSA",
+        "mes_referencia": hoy.month, "ano_referencia": hoy.year,
         "items": [{"descripcion": "Cargo raro", "cantidad": 1,
                    "precio_unitario": 1000, "iva_tasa": 7}],
     })

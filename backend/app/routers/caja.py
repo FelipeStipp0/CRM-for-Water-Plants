@@ -39,6 +39,23 @@ class CerrarCajaRequest(BaseModel):
     observaciones: Optional[str] = None
 
 
+class CargoLibreRequest(BaseModel):
+    """
+    Cargo lançado no balcão, com valor livre.
+
+    Um item só, de propósito: o balcão cobra uma coisa por vez ("reconexión",
+    "caño de 1/2"). Fatura com várias linhas é trabalho de escritório e continua
+    em `POST /invoices/`.
+    """
+    client_id: str
+    descripcion: str = Field(min_length=3, max_length=200)
+    valor: Decimal = Field(gt=0, description="Preço unitário em guaraníes")
+    cantidad: int = Field(default=1, ge=1, le=999)
+    # iva_afectacion: 1=Gravado, 2=Parcial, 3=Exento ; iva_tasa: 0/5/10
+    iva_tasa: int = Field(default=10)
+    iva_afectacion: int = Field(default=1, ge=1, le=3)
+
+
 def _sesion_to_dict(s: CashSession) -> dict:
     return {
         "id": str(s.id),
@@ -192,6 +209,91 @@ async def caja_list(
         q = q.find(CashSession.status == estado)
     sesiones = await q.sort(-CashSession.numero).limit(limit).to_list()
     return [_sesion_to_dict(s) for s in sesiones]
+
+
+@router.get("/productos")
+async def caja_productos(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+):
+    """
+    Catálogo ativo, só leitura — atalho de preenchimento do cargo do balcão.
+
+    Vive aqui e não em `/products` porque aquele router inteiro exige o escopo
+    `invoices` (é onde se cria e se desativa produto). O cajero precisa ler a
+    lista, não administrá-la.
+    """
+    from app.models.product import Product
+
+    produtos = await Product.find(Product.activo == True).sort("codigo").to_list()  # noqa: E712
+    return [
+        {
+            "id": str(p.id), "codigo": p.codigo, "descripcion": p.descripcion,
+            "precio_unitario": p.precio_unitario, "iva_tasa": p.iva_tasa,
+            "iva_afectacion": p.iva_afectacion, "unidad": p.unidad,
+        }
+        for p in produtos
+    ]
+
+
+@router.post("/cargo", status_code=status.HTTP_201_CREATED)
+async def caja_cargo(
+    body: CargoLibreRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+):
+    """
+    Fatura um cargo de valor livre para cobrar no mesmo atendimento.
+
+    Existe separado de `POST /invoices/` por causa do escopo: aquele router
+    inteiro exige `invoices` (criar em lote, anular, apagar fatura), e o cajero
+    não tem — a primeira versão disto chamava lá e tomava **403** no balcão.
+    Aqui o gate é o mesmo do resto da caja (`caja`/`payments`/`finance`) e o que
+    se pode fazer é só isto: uma AVULSA, um item, no período corrente.
+
+    Exige turno aberto: cargo lançado com a caja fechada é fatura que ninguém
+    viu nascer.
+    """
+    from datetime import date
+
+    from app.models.invoice import InvoiceItem
+    from app.services.invoice_generation import InvoiceGenerationService
+
+    if body.iva_tasa not in (0, 5, 10):
+        raise HTTPException(status_code=422, detail="iva_tasa debe ser 0, 5 o 10")
+
+    try:
+        cid = PydanticObjectId(body.client_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="client_id invalido")
+
+    # Turno aberto é a regra do balcão inteiro — o cargo nasce dentro dele.
+    await _resolver_sesion(current_user, None)
+
+    hoy = date.today()
+    item = InvoiceItem(
+        descripcion=body.descripcion.strip(),
+        cantidad=body.cantidad,
+        precio_unitario=body.valor,
+        iva_tasa=body.iva_tasa,
+        iva_afectacion=body.iva_afectacion,
+    )
+    result = await InvoiceGenerationService.create_custom_invoice(
+        client_id=cid, items=[item],
+        mes_referencia=hoy.month, ano_referencia=hoy.year,
+    )
+    if not result.success:
+        raise HTTPException(status_code=400, detail=result.error)
+
+    from app.models.invoice import Invoice
+
+    inv = await Invoice.get(result.invoice_id)
+    return {
+        "id": str(inv.id),
+        "numero_factura": inv.numero_factura,
+        "valor_total": inv.valor_total,
+        "saldo_devedor": inv.saldo_devedor,
+        "mes_referencia": inv.mes_referencia,
+        "ano_referencia": inv.ano_referencia,
+    }
 
 
 async def _resolver_sesion(current_user: User, session_id: Optional[str]) -> CashSession:

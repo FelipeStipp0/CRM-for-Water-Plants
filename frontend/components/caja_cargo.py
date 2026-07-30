@@ -10,7 +10,11 @@ está no caixa é a tesouraria. Se aparece alguém para pagar algo que ninguém
 lançou, o cajero tem de poder lançar e cobrar no mesmo atendimento.
 
 O que isto faz: cria uma fatura `AVULSA` de verdade (numerada, auditável) para o
-cliente do atendimento e devolve o `id`. A caja recarrega o contexto e o cargo
+cliente do atendimento e devolve o `id`. Via **`POST /caja/cargo`**, não
+`POST /invoices/`: aquele router inteiro exige o escopo `invoices` (criar em
+lote, anular, apagar fatura) e o cajero não tem — a primeira versão disto
+chamava lá e tomava **403** no balcão. O mesmo vale para o catálogo, que vem de
+`GET /caja/productos`. A caja recarrega o contexto e o cargo
 aparece em «OTROS CARGOS» já marcado, entrando no mesmo total, no mesmo recibo e
 na mesma factura legal. **Não** existe cobro fora de fatura: o dinheiro sempre
 cai em cima de um documento.
@@ -27,8 +31,7 @@ import flet as ft
 from components.app_modal import AppModal, ModalAction
 from components.theme import COLORS, RADIUS, create_text_field
 from services.api_client import APIError
-from services.invoice_service import invoice_service
-from services.product_service import product_service
+from services.caja_service import caja_service
 from utils.errors import friendly_error
 from utils.formatters import format_currency
 from i18n import t
@@ -128,7 +131,7 @@ def open_cargo_dialog(page: ft.Page, show_snackbar, client: dict, on_done=None):
     def _cargar_productos():
         nonlocal productos
         try:
-            productos = product_service.listar(activo=True) or []
+            productos = caja_service.productos() or []
         except Exception as exc:  # noqa: BLE001
             # Falhar aqui não impede lançar o cargo: o catálogo é só atalho.
             print(f"[Caja] cargo_products_failed err={exc}")
@@ -179,21 +182,13 @@ def open_cargo_dialog(page: ft.Page, show_snackbar, client: dict, on_done=None):
         _u(err)
 
         tasa, afect = estado["iva"]
-        payload = {
-            "client_id": client.get("id"),
-            "tipo": "AVULSA",
-            "mes_referencia": hoy.month,
-            "ano_referencia": hoy.year,
-            "items": [{
-                "descripcion": desc[:200], "cantidad": cant,
-                "precio_unitario": float(val),
-                "iva_tasa": tasa, "iva_afectacion": afect,
-            }],
-        }
 
         def work():
             try:
-                factura = invoice_service.create_custom(payload)
+                factura = caja_service.cargo(
+                    client_id=client.get("id"), descripcion=desc[:200],
+                    valor=float(val), cantidad=cant,
+                    iva_tasa=tasa, iva_afectacion=afect)
             except APIError as exc:
                 err.value = friendly_error(exc)
                 err.visible = True
